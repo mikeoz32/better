@@ -1,0 +1,30 @@
+[project]
+name = "better"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "asyncpg",
+    "fastapi>=0.137.0",
+    "msgspec",
+    "orjson",
+    "redis[hiredis]",
+    "uvicorn[standard]>=0.49.0",
+    "uvloop",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.0",
+    "pytest-benchmark>=5.2.3",
+    "pytest-env>=1.6.0",
+    "ruff>=0.15.17",
+]
+
+[tool.pytest.ini_options]
+addopts = "-s"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
