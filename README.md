@@ -12,7 +12,9 @@ The first implementation slice establishes:
 - typed message identity and origin values;
 - kernel-owned correlation and causation metadata;
 - event bus, command bus, runtime ingress and scheduler-facing protocols;
+- deterministic in-memory event/command buses and a non-recursive runtime pump;
 - deterministic recording test doubles;
+- offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
 
 The agent loop, Pydantic AI adapter, bundled tools, sessions, TUI and external

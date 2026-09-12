@@ -20,6 +20,17 @@ from better_agent.kernel.contracts import (
     Origin,
     RuntimePort,
 )
+from better_agent.kernel.errors import (
+    DuplicateCommandBindingError,
+    KernelError,
+    MissingCommandHandlerError,
+)
+from better_agent.kernel.runtime import (
+    DefaultEnvelopeFactory,
+    InMemoryCommandBus,
+    InMemoryEventBus,
+    RuntimePump,
+)
 
 __all__ = [
     "Command",
@@ -27,6 +38,8 @@ __all__ = [
     "CommandBus",
     "CommandHandler",
     "CorrelationId",
+    "DefaultEnvelopeFactory",
+    "DuplicateCommandBindingError",
     "Envelope",
     "EnvelopeFactory",
     "Event",
@@ -38,6 +51,11 @@ __all__ = [
     "ExtensionId",
     "Message",
     "MessageId",
+    "MissingCommandHandlerError",
     "Origin",
     "RuntimePort",
+    "RuntimePump",
+    "InMemoryCommandBus",
+    "InMemoryEventBus",
+    "KernelError",
 ]

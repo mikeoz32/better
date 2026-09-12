@@ -49,8 +49,9 @@ class RecordingEventBus(EventBus):
     def subscribe[E: Event](self, event_type: type[E], handler: EventHandler[E]) -> None:
         self.subscriptions.append((event_type, cast(EventHandler[Event], handler)))
 
-    async def publish[E: Event](self, event: Envelope[E]) -> None:
+    async def publish[E: Event](self, event: Envelope[E]) -> tuple[Command, ...]:
         self.published.append(cast(Envelope[Event], event))
+        return ()
 
 
 class RecordingCommandBus(CommandBus):
@@ -61,8 +62,9 @@ class RecordingCommandBus(CommandBus):
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C]) -> None:
         self.bindings[command_type] = cast(CommandBinding[Command], binding)
 
-    async def dispatch[C: Command](self, command: Envelope[C]) -> None:
+    async def dispatch[C: Command](self, command: Envelope[C]) -> tuple[Event, ...]:
         self.dispatched.append(cast(Envelope[Command], command))
+        return ()
 
 
 class RecordingRuntimePort(RuntimePort):
