@@ -21,12 +21,12 @@ class RecordingEnvelopeFactory(EnvelopeFactory):
     def __init__(self) -> None:
         self._next_id = 0
 
-    def create[T: Event | Command](
+    def create[T: Event | Command, C: Event | Command](
         self,
         payload: T,
         *,
         origin: Origin,
-        cause: Envelope[Event | Command] | None = None,
+        cause: Envelope[C] | None = None,
     ) -> Envelope[T]:
         self._next_id += 1
         message_id = MessageId(f"message-{self._next_id}")
@@ -75,4 +75,4 @@ class RecordingRuntimePort(RuntimePort):
 
 
 def exclusive_claims(_: Command) -> ExecutionClaims:
-    return ExecutionClaims(exclusive=True)
+    return ExecutionClaims()

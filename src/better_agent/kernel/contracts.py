@@ -62,10 +62,7 @@ class Envelope[T: Message]:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionClaims:
-    """Minimal scheduler input; detailed resource semantics evolve separately."""
-
-    exclusive: bool = True
-    resources: frozenset[str] = frozenset()
+    """Opaque scheduler claim contract until the scheduler story defines it."""
 
 
 class EventHandler[E: Event](Protocol):
@@ -130,11 +127,10 @@ class ExecutionScheduler(Protocol):
 class EnvelopeFactory(Protocol):
     """Creates envelopes and propagates trace metadata."""
 
-    def create[T: Message](
+    def create[T: Message, C: Message](
         self,
         payload: T,
         *,
         origin: Origin,
-        cause: Envelope[Message] | None = None,
+        cause: Envelope[C] | None = None,
     ) -> Envelope[T]: ...
-

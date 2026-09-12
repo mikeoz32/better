@@ -1,6 +1,5 @@
 from collections.abc import AsyncIterator
 from dataclasses import FrozenInstanceError, dataclass
-from typing import cast
 
 import pytest
 
@@ -10,6 +9,7 @@ from better_agent.kernel import (
     CorrelationId,
     Envelope,
     Event,
+    ExecutionClaims,
     ExtensionId,
     MessageId,
     Origin,
@@ -66,6 +66,13 @@ def test_identity_and_origin_values_are_typed_immutable_values() -> None:
     assert hash(message_id) == hash(MessageId("message-1"))
 
 
+def test_execution_claims_are_opaque_until_scheduler_slice() -> None:
+    claims = ExecutionClaims()
+
+    assert not hasattr(claims, "exclusive")
+    assert not hasattr(claims, "resources")
+
+
 def test_envelope_keeps_kernel_owned_trace_metadata() -> None:
     factory = RecordingEnvelopeFactory()
     origin = Origin(component="test")
@@ -73,7 +80,7 @@ def test_envelope_keeps_kernel_owned_trace_metadata() -> None:
     child = factory.create(
         PromptReceived("inspect"),
         origin=origin,
-        cause=cast(Envelope[Event | Command], root),
+        cause=root,
     )
 
     assert root.id == MessageId("message-1")
@@ -107,7 +114,7 @@ async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     command = factory.create(
         RunPrompt("continue"),
         origin=Origin(component="test"),
-        cause=cast(Envelope[Event | Command], event),
+        cause=event,
     )
 
     await event_bus.publish(event)
@@ -115,7 +122,7 @@ async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     message_id = await runtime_port.submit(RunPrompt("submitted"))
 
     assert event_bus.published == [event]
-    assert command_bus.bindings[RunPrompt].execution(RunPrompt("run")).exclusive
+    assert isinstance(command_bus.bindings[RunPrompt].execution(RunPrompt("run")), ExecutionClaims)
     assert command_bus.dispatched == [command]
     assert runtime_port.submitted == [RunPrompt("submitted")]
     assert message_id == MessageId("submitted-1")
