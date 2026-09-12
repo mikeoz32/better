@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import cast
 
 from better_agent.kernel import (
@@ -13,6 +14,7 @@ from better_agent.kernel import (
     ExecutionClaims,
     MessageId,
     Origin,
+    ProducedMessage,
     RuntimePort,
 )
 
@@ -46,10 +48,19 @@ class RecordingEventBus(EventBus):
         self.subscriptions: list[tuple[type[Event], EventHandler[Event]]] = []
         self.published: list[Envelope[Event]] = []
 
-    def subscribe[E: Event](self, event_type: type[E], handler: EventHandler[E]) -> None:
+    def subscribe[E: Event](
+        self,
+        event_type: type[E],
+        handler: EventHandler[E],
+        *,
+        origin: Origin,
+    ) -> None:
         self.subscriptions.append((event_type, cast(EventHandler[Event], handler)))
 
-    async def publish[E: Event](self, event: Envelope[E]) -> tuple[Command, ...]:
+    async def publish[E: Event](
+        self,
+        event: Envelope[E],
+    ) -> tuple[ProducedMessage[Command], ...]:
         self.published.append(cast(Envelope[Event], event))
         return ()
 
@@ -62,9 +73,14 @@ class RecordingCommandBus(CommandBus):
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C]) -> None:
         self.bindings[command_type] = cast(CommandBinding[Command], binding)
 
-    async def dispatch[C: Command](self, command: Envelope[C]) -> tuple[Event, ...]:
+    def dispatch[C: Command](self, command: Envelope[C]) -> AsyncIterator[ProducedMessage[Event]]:
         self.dispatched.append(cast(Envelope[Command], command))
-        return ()
+
+        async def empty() -> AsyncIterator[ProducedMessage[Event]]:
+            if False:
+                yield ProducedMessage(Event(), Origin(component="test"))
+
+        return empty()
 
 
 class RecordingRuntimePort(RuntimePort):

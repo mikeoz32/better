@@ -18,6 +18,7 @@ from better_agent.kernel.contracts import (
     Message,
     MessageId,
     Origin,
+    ProducedMessage,
     RuntimePort,
 )
 from better_agent.kernel.errors import (
@@ -53,6 +54,7 @@ __all__ = [
     "MessageId",
     "MissingCommandHandlerError",
     "Origin",
+    "ProducedMessage",
     "RuntimePort",
     "RuntimePump",
     "InMemoryCommandBus",

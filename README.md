@@ -13,6 +13,7 @@ The first implementation slice establishes:
 - kernel-owned correlation and causation metadata;
 - event bus, command bus, runtime ingress and scheduler-facing protocols;
 - deterministic in-memory event/command buses and a non-recursive runtime pump;
+- streamed command events with explicit producer origin and causation metadata;
 - deterministic recording test doubles;
 - offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.

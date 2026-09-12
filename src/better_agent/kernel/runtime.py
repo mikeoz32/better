@@ -1,7 +1,8 @@
 """Concrete event-command runtime primitives."""
 
+import asyncio
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from typing import cast
 from uuid import uuid4
@@ -19,11 +20,9 @@ from better_agent.kernel.contracts import (
     Message,
     MessageId,
     Origin,
+    ProducedMessage,
 )
-from better_agent.kernel.errors import (
-    DuplicateCommandBindingError,
-    MissingCommandHandlerError,
-)
+from better_agent.kernel.errors import DuplicateCommandBindingError, MissingCommandHandlerError
 
 
 class DefaultEnvelopeFactory(EnvelopeFactory):
@@ -49,6 +48,7 @@ class DefaultEnvelopeFactory(EnvelopeFactory):
 class _Subscription:
     event_type: type[Event]
     handler: EventHandler[Event]
+    origin: Origin
 
 
 class InMemoryEventBus(EventBus):
@@ -57,15 +57,27 @@ class InMemoryEventBus(EventBus):
     def __init__(self) -> None:
         self._subscriptions: list[_Subscription] = []
 
-    def subscribe[E: Event](self, event_type: type[E], handler: EventHandler[E]) -> None:
-        subscription = _Subscription(event_type, cast(EventHandler[Event], handler))
+    def subscribe[E: Event](
+        self,
+        event_type: type[E],
+        handler: EventHandler[E],
+        *,
+        origin: Origin,
+    ) -> None:
+        subscription = _Subscription(event_type, cast(EventHandler[Event], handler), origin)
         self._subscriptions.append(subscription)
 
-    async def publish[E: Event](self, event: Envelope[E]) -> tuple[Command, ...]:
-        commands: list[Command] = []
+    async def publish[E: Event](
+        self,
+        event: Envelope[E],
+    ) -> tuple[ProducedMessage[Command], ...]:
+        commands: list[ProducedMessage[Command]] = []
         for subscription in self._subscriptions:
             if isinstance(event.payload, subscription.event_type):
-                commands.extend(subscription.handler(cast(Envelope[Event], event)))
+                commands.extend(
+                    ProducedMessage(command, subscription.origin)
+                    for command in subscription.handler(cast(Envelope[Event], event))
+                )
         return tuple(commands)
 
 
@@ -82,14 +94,19 @@ class InMemoryCommandBus(CommandBus):
             )
         self._bindings[command_type] = cast(CommandBinding[Command], binding)
 
-    async def dispatch[C: Command](self, command: Envelope[C]) -> tuple[Event, ...]:
+    def dispatch[C: Command](self, command: Envelope[C]) -> AsyncIterator[ProducedMessage[Event]]:
         command_type = type(command.payload)
         binding = self._bindings.get(command_type)
         if binding is None:
             raise MissingCommandHandlerError(
                 f"no command handler is bound for {command_type.__name__}"
             )
-        return tuple([event async for event in binding.handler(cast(Envelope[Command], command))])
+
+        async def stream() -> AsyncIterator[ProducedMessage[Event]]:
+            async for event in binding.handler(cast(Envelope[Command], command)):
+                yield ProducedMessage(event, binding.origin)
+
+        return stream()
 
 
 class RuntimePump:
@@ -110,7 +127,7 @@ class RuntimePump:
         command: C,
         *,
         origin: Origin,
-    ) -> AsyncIterator[Envelope[Event]]:
+    ) -> AsyncGenerator[Envelope[Event], None]:
         """Run one command and stream the resulting event envelopes."""
         initial = self._envelope_factory.create(command, origin=origin)
         async for event in self.run_envelope(initial):
@@ -119,31 +136,49 @@ class RuntimePump:
     async def run_envelope[C: Command](
         self,
         command: Envelope[C],
-    ) -> AsyncIterator[Envelope[Event]]:
+    ) -> AsyncGenerator[Envelope[Event], None]:
         """Run an already enveloped command without recursive dispatch."""
-        queue: deque[Envelope[Message]] = deque([cast(Envelope[Message], command)])
-        while queue:
-            message = queue.popleft()
-            if isinstance(message.payload, Event):
-                event = cast(Envelope[Event], message)
-                commands = await self._event_bus.publish(event)
-                for produced in commands:
-                    queue.append(
-                        self._envelope_factory.create(
-                            produced,
-                            origin=event.origin,
-                            cause=event,
-                        )
-                    )
-                yield event
-                continue
+        pending: deque[Envelope[Command]] = deque([cast(Envelope[Command], command)])
+        while pending:
+            current = pending.popleft()
+            stream: asyncio.Queue[Envelope[Event] | _CommandStreamCompleted] = asyncio.Queue()
+            async with asyncio.TaskGroup() as group:
+                group.create_task(self._forward_command(current, stream))
+                while True:
+                    item = await stream.get()
+                    if isinstance(item, _CommandStreamCompleted):
+                        break
 
-            command_events = await self._command_bus.dispatch(cast(Envelope[Command], message))
-            for produced in command_events:
-                queue.append(
+                    event = item
+                    commands = await self._event_bus.publish(event)
+                    for produced in commands:
+                        pending.append(
+                            self._envelope_factory.create(
+                                produced.payload,
+                                origin=produced.origin,
+                                cause=event,
+                            )
+                        )
+                    yield event
+
+    async def _forward_command(
+        self,
+        command: Envelope[Command],
+        stream: asyncio.Queue[Envelope[Event] | _CommandStreamCompleted],
+    ) -> None:
+        try:
+            async for produced in self._command_bus.dispatch(command):
+                await stream.put(
                     self._envelope_factory.create(
-                        produced,
-                        origin=message.origin,
-                        cause=message,
+                        produced.payload,
+                        origin=produced.origin,
+                        cause=command,
                     )
                 )
+        finally:
+            await stream.put(_CommandStreamCompleted())
+
+
+@dataclass(frozen=True, slots=True)
+class _CommandStreamCompleted:
+    """Sentinel indicating that one command handler has finished streaming."""

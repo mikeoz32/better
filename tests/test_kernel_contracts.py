@@ -103,10 +103,14 @@ async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     def react(_: Envelope[PromptReceived]) -> tuple[Command, ...]:
         return (RunPrompt("continue"),)
 
-    event_bus.subscribe(PromptReceived, react)
+    event_bus.subscribe(PromptReceived, react, origin=Origin(component="test"))
     command_bus.bind(
         RunPrompt,
-        CommandBinding(handler=handle_prompt, execution=exclusive_claims),
+        CommandBinding(
+            handler=handle_prompt,
+            execution=exclusive_claims,
+            origin=Origin(component="test"),
+        ),
     )
 
     factory = RecordingEnvelopeFactory()
@@ -118,7 +122,8 @@ async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     )
 
     await event_bus.publish(event)
-    await command_bus.dispatch(command)
+    async for _ in command_bus.dispatch(command):
+        pass
     message_id = await runtime_port.submit(RunPrompt("submitted"))
 
     assert event_bus.published == [event]
