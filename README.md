@@ -1,65 +1,46 @@
-# better
+# Better Agent
 
-FastAPI implementation of a simplified Ad Exchange Auction Service.
+Better Agent is a Python-native coding-agent harness built as an event-command
+microkernel with bundled core extensions. The kernel is library-first and keeps
+feature behavior behind typed event, command and extension contracts.
 
-## Stack
+## Current Slice
 
-- FastAPI with `uvicorn` and `uvloop`
-- `msgspec` for fast request JSON decoding
-- `orjson` for response serialization
-- PostgreSQL via `asyncpg` for supply/bidder data
-- Redis with `hiredis` for rate limiting, counters, and cached `/stat` snapshots
+The first implementation slice establishes:
 
-## Run
+- immutable `Event`, `Command` and `Envelope` message contracts;
+- typed message identity and origin values;
+- kernel-owned correlation and causation metadata;
+- event bus, command bus, runtime ingress and scheduler-facing protocols;
+- deterministic recording test doubles;
+- the `better-agent` distribution and `ba` CLI entry point.
 
-Start the app, PostgreSQL, and Redis:
+The agent loop, Pydantic AI adapter, bundled tools, sessions, TUI and external
+extension discovery are implemented in subsequent backlog slices.
 
-```bash
-docker compose up --build
-```
+## Development
 
-The API listens on `http://localhost:8000`.
-
-Run one auction:
-
-```bash
-curl -X POST 'http://localhost:8000/bid?max_timeout_ms=50' \
-  -H 'content-type: application/json' \
-  -d '{"supply_id":"supply1","ip":"123.45.67.89","country":"US"}'
-```
-
-Read statistics:
-
-```bash
-curl http://localhost:8000/stat
-```
-
-## Local Development
-
-Install dependencies:
+Better Agent targets Python 3.14 and uses `uv` for environment and command
+execution:
 
 ```bash
 uv sync
-```
-
-Run tests and benchmarks:
-
-```bash
+uv run ba --help
 uv run pytest
-```
-
-Run linting:
-
-```bash
 uv run ruff check .
+uv run ty check
 ```
 
-Run without Docker only if PostgreSQL and Redis are available at `DATABASE_URL` and `REDIS_URL`:
+The import package is `better_agent`; the distribution package is
+`better-agent`; the command-line entry point is `ba`.
 
-```bash
-uv run uvicorn app.main:app --reload
-```
+## Architecture
 
-## Notes On Scaling
+The kernel owns lifecycle mechanics, typed event-command dispatch, message
+envelopes, scheduling boundaries, extension resolution and cancellation. Core
+capabilities such as tools, sessions, context, compaction, policy and TUI are
+bundled extensions using the same public extension model as external packages.
 
-PostgreSQL stores normalized supply and bidder data and can be scaled with read replicas if the catalog becomes large. Redis handles request-rate counters, auction statistics, and the cached `/stat` response; the cache TTL is intentionally short so writes stay simple while repeated stats reads avoid rebuilding the response on every request. The app is stateless outside PostgreSQL and Redis, so more API containers can be added behind a load balancer without changing application code.
+The default verification suite is deterministic and offline. No FastAPI server,
+database, Redis service or Docker Compose stack is part of the current product
+surface.
