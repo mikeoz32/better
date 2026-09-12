@@ -1,29 +1,32 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
 [project]
-name = "better"
+name = "better-agent"
 version = "0.1.0"
+description = "A small event-command coding-agent microkernel."
+readme = "README.md"
 requires-python = ">=3.14"
-dependencies = [
-    "asyncpg",
-    "fastapi>=0.137.0",
-    "msgspec",
-    "orjson",
-    "redis[hiredis]",
-    "uvicorn[standard]>=0.49.0",
-    "uvloop",
-]
+dependencies = []
+
+[project.scripts]
+ba = "better_agent.cli:main"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.1.0",
     "pytest-benchmark>=5.2.3",
-    "pytest-env>=1.6.0",
     "ruff>=0.15.17",
+    "ty>=0.0.1",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/better_agent"]
 
 [tool.pytest.ini_options]
 addopts = "-s"
-pythonpath = ["."]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.ruff]
