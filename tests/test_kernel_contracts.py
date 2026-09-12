@@ -94,7 +94,7 @@ def test_envelope_keeps_kernel_owned_trace_metadata() -> None:
         setattr(child, "origin", Origin(component="other"))
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     event_bus = RecordingEventBus()
     command_bus = RecordingCommandBus()
