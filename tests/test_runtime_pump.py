@@ -60,21 +60,21 @@ async def test_event_bus_fans_out_in_registration_order_and_collects_commands() 
         calls.append(f"second:{event.payload.depth}")
         return (Continue(event.payload.depth + 2),)
 
-    bus.subscribe(Started, first, origin=Origin(component="first-subscriber"))
-    bus.subscribe(Started, second, origin=Origin(component="second-subscriber"))
+    bus.subscribe(Started, first)
+    bus.subscribe(Started, second)
     event = DefaultEnvelopeFactory().create(
         Started(1),
         origin=Origin(component="test"),
     )
 
-    commands = await bus.publish(event)
+    commands = await bus._react(event)
 
     assert calls == ["first:1", "second:1"]
     assert [command.payload for command in commands] == [Continue(2), Continue(3)]
-    assert [command.origin for command in commands] == [
-        Origin(component="first-subscriber"),
-        Origin(component="second-subscriber"),
-    ]
+    command_origins = [command.origin.component for command in commands]
+    assert len(command_origins) == 2
+    assert command_origins[0].endswith(".first")
+    assert command_origins[1].endswith(".second")
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_event_bus_allows_events_without_subscribers() -> None:
         origin=Origin(component="test"),
     )
 
-    assert await InMemoryEventBus().publish(event) == ()
+    assert await InMemoryEventBus().publish(event) is None
 
 
 @pytest.mark.asyncio
@@ -93,7 +93,6 @@ async def test_command_bus_requires_exactly_one_binding() -> None:
     binding = CommandBinding(
         handler=start_handler,
         execution=exclusive_claims,
-        origin=Origin(component="start-handler"),
     )
     bus.bind(Start, binding)
 
@@ -101,13 +100,12 @@ async def test_command_bus_requires_exactly_one_binding() -> None:
         bus.bind(Start, binding)
 
     with pytest.raises(MissingCommandHandlerError):
-        async for _ in bus.dispatch(
+        await bus.dispatch(
             DefaultEnvelopeFactory().create(
                 Continue(1),
                 origin=Origin(component="test"),
             )
-        ):
-            pass
+        )
 
 
 @pytest.mark.asyncio
@@ -128,7 +126,6 @@ async def test_command_bus_streams_events_before_handler_completion() -> None:
         CommandBinding(
             streaming_handler,
             exclusive_claims,
-            origin=Origin(component="stream-handler"),
         ),
     )
     command = DefaultEnvelopeFactory().create(
@@ -136,11 +133,11 @@ async def test_command_bus_streams_events_before_handler_completion() -> None:
         origin=Origin(component="test"),
     )
 
-    events = bus.dispatch(command)
+    events = bus._stream(command)
     first = await anext(events)
 
     assert first.payload == Started(1)
-    assert first.origin == Origin(component="stream-handler")
+    assert first.origin.component.endswith("streaming_handler")
     assert finished is False
 
     release.set()
@@ -167,7 +164,6 @@ async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishe
         CommandBinding(
             streaming_handler,
             exclusive_claims,
-            origin=Origin(component="stream-handler"),
         ),
     )
     pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
@@ -182,6 +178,34 @@ async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishe
 
     assert first.payload == Started(1)
     assert finished is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_pump_applies_backpressure_to_streamed_events() -> None:
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus()
+    pulled = 0
+
+    async def streaming_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
+        nonlocal pulled
+        pulled += 1
+        yield Started(1)
+        pulled += 1
+        yield Continued(2)
+
+    command_bus.bind(Start, CommandBinding(streaming_handler, exclusive_claims))
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    events = pump.run(Start(), origin=Origin(component="test"))
+
+    first = await anext(events)
+    assert first.payload == Started(1)
+    assert pulled == 1
+
+    second = await anext(events)
+    assert second.payload == Continued(2)
+    assert pulled == 2
+
+    await events.aclose()
 
 
 @pytest.mark.asyncio
@@ -203,14 +227,13 @@ async def test_runtime_waits_for_all_event_reactions_before_running_commands() -
         log.append("command-handler")
         yield Continued(1)
 
-    event_bus.subscribe(Started, first, origin=Origin(component="first-subscriber"))
-    event_bus.subscribe(Started, second, origin=Origin(component="second-subscriber"))
+    event_bus.subscribe(Started, first)
+    event_bus.subscribe(Started, second)
     command_bus.bind(
         Start,
         CommandBinding(
             start_handler,
             exclusive_claims,
-            origin=Origin(component="start-handler"),
         ),
     )
     command_bus.bind(
@@ -218,7 +241,6 @@ async def test_runtime_waits_for_all_event_reactions_before_running_commands() -
         CommandBinding(
             continue_and_record,
             exclusive_claims,
-            origin=Origin(component="continue-handler"),
         ),
     )
     pump = RuntimePump(event_bus, command_bus, factory)
@@ -230,8 +252,8 @@ async def test_runtime_waits_for_all_event_reactions_before_running_commands() -
     assert events[0].correlation_id == events[1].correlation_id
     assert events[0].causation_id == MessageId("message-1")
     assert events[1].causation_id == MessageId("message-3")
-    assert events[0].origin == Origin(component="start-handler")
-    assert events[1].origin == Origin(component="continue-handler")
+    assert events[0].origin.component.endswith("start_handler")
+    assert events[1].origin.component.endswith("continue_and_record")
 
 
 @pytest.mark.asyncio
@@ -254,13 +276,12 @@ async def test_runtime_pump_handles_deep_event_command_chains_without_recursion(
     async def chain_handler(command: Envelope[Continue]) -> AsyncIterator[Event]:
         yield Continued(command.payload.depth)
 
-    event_bus.subscribe(Continued, continue_chain, origin=Origin(component="chain-subscriber"))
+    event_bus.subscribe(Continued, continue_chain)
     command_bus.bind(
         Continue,
         CommandBinding(
             chain_handler,
             exclusive_claims,
-            origin=Origin(component="chain-handler"),
         ),
     )
     pump = RuntimePump(event_bus, command_bus, factory)

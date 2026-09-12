@@ -61,14 +61,6 @@ class Envelope[T: Message]:
 
 
 @dataclass(frozen=True, slots=True)
-class ProducedMessage[T: Message]:
-    """Message payload plus the component that produced it."""
-
-    payload: T
-    origin: Origin
-
-
-@dataclass(frozen=True, slots=True)
 class ExecutionClaims:
     """Opaque scheduler claim contract until the scheduler story defines it."""
 
@@ -97,7 +89,6 @@ class CommandBinding[C: Command]:
 
     handler: CommandHandler[C]
     execution: ExecutionPlanner[C]
-    origin: Origin
 
 
 class RuntimePort(Protocol):
@@ -113,15 +104,14 @@ class EventBus(Protocol):
         self,
         event_type: type[E],
         handler: EventHandler[E],
-        *,
-        origin: Origin,
+        /,
     ) -> None: ...
 
     async def publish[E: Event](
         self,
         event: Envelope[E],
         /,
-    ) -> tuple[ProducedMessage[Command], ...]: ...
+    ) -> None: ...
 
 
 class CommandBus(Protocol):
@@ -129,11 +119,11 @@ class CommandBus(Protocol):
 
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C], /) -> None: ...
 
-    def dispatch[C: Command](
+    async def dispatch[C: Command](
         self,
         command: Envelope[C],
         /,
-    ) -> AsyncIterator[ProducedMessage[Event]]: ...
+    ) -> None: ...
 
 
 class ExecutionScheduler(Protocol):
