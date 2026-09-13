@@ -51,6 +51,7 @@ class CapabilityScheduler(ExecutionScheduler):
                 async with self._lock:
                     if ticket in self._pending:
                         self._pending.remove(ticket)
+                        self._schedule_ready()
                     elif ticket in self._active:
                         self._active.remove(ticket)
                         self._schedule_ready()

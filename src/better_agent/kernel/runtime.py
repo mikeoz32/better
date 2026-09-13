@@ -50,6 +50,24 @@ class _Subscription:
     handler: EventHandler[Event]
 
 
+@dataclass(frozen=True, slots=True)
+class _StartCommand:
+    envelope: Envelope[Command]
+
+
+@dataclass(frozen=True, slots=True)
+class _EventAcknowledged:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _DrainFinished:
+    pass
+
+
+type _ControlMessage = _StartCommand | _EventAcknowledged | _DrainFinished
+
+
 class InMemoryEventBus(EventBus):
     """Fan out events and return produced commands in registration order."""
 
@@ -153,11 +171,15 @@ class RuntimePump:
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run an already enveloped command with structured task ownership."""
         inbox: asyncio.Queue[Envelope[Event]] = asyncio.Queue(maxsize=self._inbox_size)
-        state_changed = asyncio.Condition()
+        control: asyncio.Queue[_ControlMessage] = asyncio.Queue(maxsize=self._inbox_size)
+        state_lock = asyncio.Lock()
         active_tasks = 0
+        pending_events = 0
+        supervisor_done = asyncio.Event()
+        supervisor_error: BaseException | None = None
 
         async def drain(current: Envelope[Command]) -> None:
-            nonlocal active_tasks
+            nonlocal pending_events
             try:
                 async for produced_event in self._command_bus.dispatch(current):
                     event = self._envelope_factory.create(
@@ -165,33 +187,103 @@ class RuntimePump:
                         origin=current.origin,
                         cause=current,
                     )
-                    await inbox.put(event)
-                    async with state_changed:
-                        state_changed.notify_all()
+                    async with state_lock:
+                        pending_events += 1
+                    try:
+                        await inbox.put(event)
+                    except BaseException:
+                        async with state_lock:
+                            pending_events -= 1
+                        raise
             finally:
-                async with state_changed:
-                    active_tasks -= 1
-                    state_changed.notify_all()
+                current_task = asyncio.current_task()
+                if current_task is None or not current_task.cancelling():
+                    await control.put(_DrainFinished())
 
-        async with asyncio.TaskGroup() as tasks:
-            owned_tasks: set[asyncio.Task[None]] = set()
+        async def supervise() -> None:
+            nonlocal active_tasks, pending_events, supervisor_error
 
-            def start(current: Envelope[Command]) -> None:
-                nonlocal active_tasks
-                active_tasks += 1
-                task = tasks.create_task(drain(current))
-                owned_tasks.add(task)
-                task.add_done_callback(owned_tasks.discard)
+            try:
+                async with asyncio.TaskGroup() as tasks:
+                    def start(current: Envelope[Command]) -> None:
+                        nonlocal active_tasks
+                        active_tasks += 1
+                        tasks.create_task(drain(current))
 
-            start(cast(Envelope[Command], command))
-            while True:
-                async with state_changed:
-                    while inbox.empty() and active_tasks:
-                        await state_changed.wait()
-                    if inbox.empty():
-                        break
-                    event = inbox.get_nowait()
+                    start(cast(Envelope[Command], command))
+                    while True:
+                        message = await control.get()
+                        if isinstance(message, _StartCommand):
+                            start(message.envelope)
+                        elif isinstance(message, _EventAcknowledged):
+                            async with state_lock:
+                                pending_events -= 1
+                        else:
+                            active_tasks -= 1
 
+                        async with state_lock:
+                            is_idle = (
+                                active_tasks == 0
+                                and pending_events == 0
+                                and control.empty()
+                            )
+                        if is_idle:
+                            break
+            except asyncio.CancelledError:
+                raise
+            except BaseException as error:
+                supervisor_error = error
+            finally:
+                supervisor_done.set()
+
+        supervisor = asyncio.create_task(supervise())
+
+        async def send_control(message: _ControlMessage) -> None:
+            put_task = asyncio.create_task(control.put(message))
+            done_task = asyncio.create_task(supervisor_done.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    (put_task, done_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except BaseException:
+                put_task.cancel()
+                done_task.cancel()
+                await asyncio.gather(put_task, done_task, return_exceptions=True)
+                raise
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            if put_task in done:
+                return
+            if supervisor_error is not None:
+                raise supervisor_error
+            raise RuntimeError("runtime supervisor stopped before accepting control")
+
+        async def next_event() -> Envelope[Event] | None:
+            get_task = asyncio.create_task(inbox.get())
+            done_task = asyncio.create_task(supervisor_done.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    (get_task, done_task),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except BaseException:
+                get_task.cancel()
+                done_task.cancel()
+                await asyncio.gather(get_task, done_task, return_exceptions=True)
+                raise
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            if get_task in done:
+                return get_task.result()
+            if supervisor_error is not None:
+                raise supervisor_error
+            return None
+
+        try:
+            while (event := await next_event()) is not None:
                 produced_commands = await self._event_bus.publish(event)
                 for produced_command in produced_commands:
                     child = self._envelope_factory.create(
@@ -199,10 +291,10 @@ class RuntimePump:
                         origin=event.origin,
                         cause=event,
                     )
-                    start(child)
-                try:
-                    yield event
-                except GeneratorExit:
-                    for task in owned_tasks:
-                        task.cancel()
-                    return
+                    await send_control(_StartCommand(child))
+                await send_control(_EventAcknowledged())
+                yield event
+        finally:
+            if not supervisor.done():
+                supervisor.cancel()
+            await asyncio.gather(supervisor, return_exceptions=True)

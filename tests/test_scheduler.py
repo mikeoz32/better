@@ -139,6 +139,59 @@ async def test_unrelated_claim_bypasses_older_blocked_claim() -> None:
 
 
 @pytest.mark.asyncio
+async def test_waiting_cancellation_reschedules_younger_claim() -> None:
+    class ObservableScheduler(CapabilityScheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.admission_requests = 0
+            self.third_request = asyncio.Event()
+
+        def admit(self, claims: ExecutionClaims):
+            self.admission_requests += 1
+            if self.admission_requests == 3:
+                self.third_request.set()
+            return super().admit(claims)
+
+    scheduler = ObservableScheduler()
+    active_started = asyncio.Event()
+    younger_started = asyncio.Event()
+    active_release = asyncio.Event()
+
+    async def active() -> None:
+        active_started.set()
+        await active_release.wait()
+
+    async def older() -> None:
+        raise AssertionError("cancelled waiting request must not start")
+
+    async def younger() -> None:
+        younger_started.set()
+
+    active_task = asyncio.create_task(_run_admitted(scheduler, write("x"), active))
+    await wait_for_started(active_started)
+    older_task = asyncio.create_task(
+        _run_admitted(
+            scheduler,
+            ExecutionClaims(
+                reads=frozenset({"x", "y"}),
+                exclusive=False,
+            ),
+            older,
+        ),
+    )
+    younger_task = asyncio.create_task(_run_admitted(scheduler, write("y"), younger))
+    await wait_for_started(scheduler.third_request)
+
+    older_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await older_task
+    await wait_for_started(younger_started)
+
+    active_release.set()
+    await asyncio.gather(active_task, younger_task)
+
+
+@pytest.mark.asyncio
 async def test_unknown_claims_block_known_claims_conservatively() -> None:
     class ObservableScheduler(CapabilityScheduler):
         def __init__(self) -> None:

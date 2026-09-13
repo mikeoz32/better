@@ -232,12 +232,34 @@ async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishe
 
     try:
         first = await anext(events)
+        assert first.payload == Started(1)
+        assert finished is False
     finally:
         release.set()
         await events.aclose()
 
-    assert first.payload == Started(1)
-    assert finished is False
+
+@pytest.mark.asyncio
+async def test_handler_failure_is_reported_on_next_read_not_at_public_yield() -> None:
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
+
+    async def failing_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
+        yield Started(1)
+        raise ValueError("handler failed")
+
+    command_bus.bind(Start, CommandBinding(failing_handler, exclusive_claims))
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    events = pump.run(Start(), origin=Origin(component="test"))
+
+    assert (await anext(events)).payload == Started(1)
+    consumer_continued = True
+    assert consumer_continued is True
+    with pytest.raises(ExceptionGroup) as error:
+        await anext(events)
+    assert isinstance(error.value.exceptions[0], ValueError)
+    assert str(error.value.exceptions[0]) == "handler failed"
+    await events.aclose()
 
 
 @pytest.mark.asyncio
