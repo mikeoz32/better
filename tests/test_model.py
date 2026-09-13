@@ -174,20 +174,41 @@ def test_scripted_runtime_expected_request_mismatch_fails_without_silent_replay(
         runtime.run(actual)
 
 
-def test_explicit_tool_continuation_preserves_model_call_order() -> None:
+def test_scripted_runtime_models_two_invocation_tool_continuation() -> None:
+    first_request = request()
     calls = (tool_call("call-1"), tool_call("call-2"))
     assistant = ModelAssistantMessage(tool_calls=calls)
     results = (
         ModelToolResultMessage("call-1", "lookup", "first"),
         ModelToolResultMessage("call-2", "lookup", "second", is_error=True),
     )
-
     continuation = ModelRequest(
-        messages=request().messages + (assistant,) + results,
-        tools=request().tools,
+        messages=first_request.messages + (assistant,) + results,
+        tools=first_request.tools,
+    )
+    runtime = ScriptedModelRuntime(
+        (
+            ScriptedModelStep(
+                (ModelResponseCompleted(assistant),),
+                expected_request=first_request,
+            ),
+            ScriptedModelStep(
+                (ModelResponseCompleted(ModelAssistantMessage("final answer")),),
+                expected_request=continuation,
+            ),
+        ),
     )
 
-    assert continuation.messages[-3:] == (assistant, *results)
+    async def invoke_twice() -> tuple[list[ModelEvent], list[ModelEvent]]:
+        first_events = [event async for event in runtime.run(first_request)]
+        continuation_events = [event async for event in runtime.run(continuation)]
+        return first_events, continuation_events
+
+    first_events, continuation_events = asyncio.run(invoke_twice())
+
+    assert first_events == [ModelResponseCompleted(assistant)]
+    assert continuation_events == [ModelResponseCompleted(ModelAssistantMessage("final answer"))]
+    assert runtime.requests == [first_request, continuation]
 
 
 def test_typed_model_failure_is_distinct_from_unexpected_exception() -> None:
