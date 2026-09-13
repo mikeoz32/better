@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from typing import cast
 
 from better_agent.kernel import (
@@ -46,11 +47,21 @@ class RecordingEventBus(EventBus):
         self.subscriptions: list[tuple[type[Event], EventHandler[Event]]] = []
         self.published: list[Envelope[Event]] = []
 
-    def subscribe[E: Event](self, event_type: type[E], handler: EventHandler[E]) -> None:
+    def subscribe[E: Event](
+        self,
+        event_type: type[E],
+        handler: EventHandler[E],
+        /,
+    ) -> None:
         self.subscriptions.append((event_type, cast(EventHandler[Event], handler)))
 
-    async def publish[E: Event](self, event: Envelope[E]) -> None:
+    async def publish[E: Event](
+        self,
+        event: Envelope[E],
+        /,
+    ) -> tuple[Command, ...]:
         self.published.append(cast(Envelope[Event], event))
+        return ()
 
 
 class RecordingCommandBus(CommandBus):
@@ -61,8 +72,14 @@ class RecordingCommandBus(CommandBus):
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C]) -> None:
         self.bindings[command_type] = cast(CommandBinding[Command], binding)
 
-    async def dispatch[C: Command](self, command: Envelope[C]) -> None:
+    def dispatch[C: Command](self, command: Envelope[C], /) -> AsyncIterator[Event]:
         self.dispatched.append(cast(Envelope[Command], command))
+
+        async def stream() -> AsyncIterator[Event]:
+            if False:
+                yield cast(Event, None)
+
+        return stream()
 
 
 class RecordingRuntimePort(RuntimePort):

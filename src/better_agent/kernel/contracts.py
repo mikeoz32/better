@@ -100,9 +100,18 @@ class RuntimePort(Protocol):
 class EventBus(Protocol):
     """Event subscription and publication boundary."""
 
-    def subscribe[E: Event](self, event_type: type[E], handler: EventHandler[E], /) -> None: ...
+    def subscribe[E: Event](
+        self,
+        event_type: type[E],
+        handler: EventHandler[E],
+        /,
+    ) -> None: ...
 
-    async def publish[E: Event](self, event: Envelope[E], /) -> None: ...
+    async def publish[E: Event](
+        self,
+        event: Envelope[E],
+        /,
+    ) -> tuple[Command, ...]: ...
 
 
 class CommandBus(Protocol):
@@ -110,7 +119,11 @@ class CommandBus(Protocol):
 
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C], /) -> None: ...
 
-    async def dispatch[C: Command](self, command: Envelope[C], /) -> None: ...
+    def dispatch[C: Command](
+        self,
+        command: Envelope[C],
+        /,
+    ) -> AsyncIterator[Event]: ...
 
 
 class ExecutionScheduler(Protocol):

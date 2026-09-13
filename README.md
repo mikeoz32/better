@@ -12,7 +12,10 @@ The first implementation slice establishes:
 - typed message identity and origin values;
 - kernel-owned correlation and causation metadata;
 - event bus, command bus, runtime ingress and scheduler-facing protocols;
+- deterministic in-memory event/command buses and a non-recursive runtime pump;
+- streamed command events with propagated origin and causation metadata;
 - deterministic recording test doubles;
+- offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
 
 The agent loop, Pydantic AI adapter, bundled tools, sessions, TUI and external
@@ -40,6 +43,16 @@ The kernel owns lifecycle mechanics, typed event-command dispatch, message
 envelopes, scheduling boundaries, extension resolution and cancellation. Core
 capabilities such as tools, sessions, context, compaction, policy and TUI are
 bundled extensions using the same public extension model as external packages.
+
+Runtime composition wires the two public buses and the envelope factory into the pump:
+
+```python
+pump = RuntimePump(
+    InMemoryEventBus(),
+    InMemoryCommandBus(),
+    DefaultEnvelopeFactory(),
+)
+```
 
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product

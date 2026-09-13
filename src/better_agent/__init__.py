@@ -6,6 +6,8 @@ from better_agent.kernel import (
     CommandBus,
     CommandHandler,
     CorrelationId,
+    DefaultEnvelopeFactory,
+    DuplicateCommandBindingError,
     Envelope,
     EnvelopeFactory,
     Event,
@@ -17,8 +19,13 @@ from better_agent.kernel import (
     ExtensionId,
     Message,
     MessageId,
+    MissingCommandHandlerError,
     Origin,
     RuntimePort,
+    RuntimePump,
+    InMemoryCommandBus,
+    InMemoryEventBus,
+    KernelError,
 )
 
 __all__ = [
@@ -27,6 +34,8 @@ __all__ = [
     "CommandBus",
     "CommandHandler",
     "CorrelationId",
+    "DefaultEnvelopeFactory",
+    "DuplicateCommandBindingError",
     "Envelope",
     "EnvelopeFactory",
     "Event",
@@ -38,6 +47,11 @@ __all__ = [
     "ExtensionId",
     "Message",
     "MessageId",
+    "MissingCommandHandlerError",
     "Origin",
     "RuntimePort",
+    "RuntimePump",
+    "InMemoryCommandBus",
+    "InMemoryEventBus",
+    "KernelError",
 ]
