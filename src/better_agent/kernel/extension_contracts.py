@@ -2,12 +2,10 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
 from better_agent.kernel.contracts import ExtensionId
-
-if TYPE_CHECKING:
-    from better_agent.kernel.extensions import Extension
+from better_agent.kernel.errors import KernelError
+from better_agent.kernel.extensions import Extension
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,5 +38,13 @@ class ExtensionLoadFailure:
 class ExtensionLoadResult:
     """Extensions and load failures reported by one discovery source."""
 
-    extensions: tuple["Extension", ...] = ()
+    extensions: tuple[Extension, ...] = ()
     failures: tuple[ExtensionLoadFailure, ...] = ()
+
+
+class RequiredExtensionLoadError(KernelError):
+    """Raised when discovery cannot load one or more required extensions."""
+
+    def __init__(self, failures: tuple[ExtensionLoadFailure, ...]) -> None:
+        self.failures = failures
+        super().__init__(f"required extension load failed for {len(failures)} extension(s)")

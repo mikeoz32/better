@@ -1,7 +1,6 @@
 """Runtime errors raised by the kernel dispatch boundaries."""
 
 from better_agent.kernel.contracts import ExtensionId
-from better_agent.kernel.extension_contracts import ExtensionLoadFailure
 
 
 class KernelError(RuntimeError):
@@ -69,14 +68,6 @@ class ExtensionDependencyCycleError(KernelError):
     def __init__(self, cycle: tuple[ExtensionId, ...]) -> None:
         self.cycle = cycle
         super().__init__("extension dependency cycle: " + " -> ".join(map(str, cycle)))
-
-
-class RequiredExtensionLoadError(KernelError):
-    """Raised when discovery cannot load one or more required extensions."""
-
-    def __init__(self, failures: tuple[ExtensionLoadFailure, ...]) -> None:
-        self.failures = failures
-        super().__init__(f"required extension load failed for {len(failures)} extension(s)")
 
 
 class ExtensionInstallError(KernelError):

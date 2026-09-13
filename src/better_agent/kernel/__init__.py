@@ -33,6 +33,7 @@ from better_agent.kernel.extension_contracts import (
     ExtensionLoadFailureKind,
     ExtensionLoadResult,
     ExtensionRequirement,
+    RequiredExtensionLoadError,
 )
 from better_agent.kernel.extension_host import (
     DefaultExtensionHost,
@@ -50,7 +51,6 @@ from better_agent.kernel.errors import (
     KernelError,
     MissingCommandHandlerError,
     MissingExtensionDependencyError,
-    RequiredExtensionLoadError,
     ExtensionInstallError,
     ExtensionRegistrationError,
     ExtensionHostStateError,

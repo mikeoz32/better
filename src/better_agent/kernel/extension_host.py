@@ -18,13 +18,13 @@ from better_agent.kernel.errors import (
     ExtensionHostStateError,
     ExtensionInstallError,
     ExtensionRegistrationError,
-    RequiredExtensionLoadError,
 )
 from better_agent.kernel.extension_contracts import (
     ExtensionLoadFailure,
     ExtensionLoadFailureKind,
     ExtensionLoadResult,
     ExtensionRequirement,
+    RequiredExtensionLoadError,
 )
 from better_agent.kernel.extensions import (
     Extension,
