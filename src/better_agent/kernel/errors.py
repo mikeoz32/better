@@ -68,3 +68,29 @@ class ExtensionDependencyCycleError(KernelError):
     def __init__(self, cycle: tuple[ExtensionId, ...]) -> None:
         self.cycle = cycle
         super().__init__("extension dependency cycle: " + " -> ".join(map(str, cycle)))
+
+
+class ExtensionInstallError(KernelError):
+    """Raised when an extension fails while installing into the staging registrar."""
+
+    def __init__(self, extension_id: ExtensionId) -> None:
+        self.extension_id = extension_id
+        super().__init__(f"extension {extension_id} installation failed")
+
+
+class ExtensionRegistrationError(KernelError):
+    """Raised when staged registration cannot be replayed into the real registrar."""
+
+    def __init__(self, extension_id: ExtensionId, operation: str) -> None:
+        self.extension_id = extension_id
+        self.operation = operation
+        super().__init__(f"extension {extension_id} {operation} registration failed")
+
+
+class ExtensionHostStateError(KernelError):
+    """Raised when host lifecycle operations are attempted in an invalid state."""
+
+    def __init__(self, operation: str, state: str) -> None:
+        self.operation = operation
+        self.state = state
+        super().__init__(f"cannot {operation} extension host in {state} state")

@@ -18,12 +18,14 @@ The first implementation slice establishes:
 - explicit run lifecycle, semantic cancellation and step-budget enforcement;
 - typed runtime faults and gated terminal outcome finalization through `Harness`;
 - structural extension contracts with deterministic dependency resolution;
+- static and Python entry-point extension discovery with typed load diagnostics;
+- staged extension host startup with explicit failure and lifecycle semantics;
 - deterministic recording test doubles;
 - offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
 
-The agent loop, Pydantic AI adapter, bundled tools, sessions, TUI and external
-extension discovery are implemented in subsequent backlog slices.
+The agent loop, Pydantic AI adapter, bundled tools, sessions and TUI are
+implemented in subsequent backlog slices.
 
 ## Development
 
@@ -84,8 +86,11 @@ Extensions declare an immutable `ExtensionSpec` and synchronously contribute
 typed subscriptions and command bindings through `ExtensionRegistrar`. The
 `TopologicalExtensionResolver` validates duplicate IDs, missing requirements
 and cycles, then returns dependencies before dependents with lexical ordering
-for otherwise independent extensions. Discovery and host lifecycle belong to
-BA-12, not this contract layer.
+for otherwise independent extensions. `StaticExtensionSource` supports bundled
+and test composition, while `EntryPointExtensionSource` discovers the fixed
+`better_agent.extensions` group. `DefaultExtensionHost` resolves, stages and
+replays extension registrations before marking the host started; optional load
+failures are reported and required failures abort startup.
 
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product

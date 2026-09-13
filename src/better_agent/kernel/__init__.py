@@ -28,6 +28,21 @@ from better_agent.kernel.extensions import (
     ExtensionSpec,
     TopologicalExtensionResolver,
 )
+from better_agent.kernel.extension_contracts import (
+    ExtensionLoadFailure,
+    ExtensionLoadFailureKind,
+    ExtensionLoadResult,
+    ExtensionRequirement,
+    RequiredExtensionLoadError,
+)
+from better_agent.kernel.extension_host import (
+    DefaultExtensionHost,
+    EntryPointExtensionSource,
+    ExtensionHost,
+    ExtensionHostReport,
+    ExtensionSource,
+    StaticExtensionSource,
+)
 from better_agent.kernel.errors import (
     DuplicateCommandBindingError,
     DuplicateExtensionIdError,
@@ -36,6 +51,9 @@ from better_agent.kernel.errors import (
     KernelError,
     MissingCommandHandlerError,
     MissingExtensionDependencyError,
+    ExtensionInstallError,
+    ExtensionRegistrationError,
+    ExtensionHostStateError,
     RunFinalizationError,
 )
 from better_agent.kernel.harness import Harness
@@ -96,6 +114,20 @@ __all__ = [
     "RunFinalizationError",
     "RunPump",
     "TopologicalExtensionResolver",
+    "ExtensionHost",
+    "ExtensionHostReport",
+    "ExtensionLoadFailure",
+    "ExtensionLoadFailureKind",
+    "ExtensionLoadResult",
+    "ExtensionRequirement",
+    "ExtensionSource",
+    "StaticExtensionSource",
+    "EntryPointExtensionSource",
+    "DefaultExtensionHost",
+    "RequiredExtensionLoadError",
+    "ExtensionInstallError",
+    "ExtensionRegistrationError",
+    "ExtensionHostStateError",
     "Harness",
     "CancelledOutcome",
     "CommitRunOutcome",
