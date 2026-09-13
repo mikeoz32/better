@@ -24,6 +24,7 @@ from better_agent.kernel.errors import (
     DuplicateCommandBindingError,
     KernelError,
     MissingCommandHandlerError,
+    RuntimeDispatchContextError,
 )
 from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
@@ -52,6 +53,7 @@ __all__ = [
     "Message",
     "MessageId",
     "MissingCommandHandlerError",
+    "RuntimeDispatchContextError",
     "Origin",
     "RuntimePort",
     "RuntimePump",
