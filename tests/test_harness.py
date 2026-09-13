@@ -10,6 +10,7 @@ from better_agent import (
     CommitRunOutcome,
     CompletedOutcome,
     DefaultEnvelopeFactory,
+    Envelope,
     Event,
     FailedOutcome,
     Harness,
@@ -20,6 +21,7 @@ from better_agent import (
     RunFinalizationError,
     RunLimits,
     RunOutcomeReady,
+    RunPump,
     RunStarted,
     RunCancelled,
     RuntimeFault,
@@ -53,6 +55,29 @@ async def one_work_event(_: object) -> AsyncIterator[Event]:
     yield WorkProduced(1)
 
 
+class ScriptedRunPump:
+    def __init__(self, factory: DefaultEnvelopeFactory) -> None:
+        self._factory = factory
+        self.received_max_steps: int | None = None
+
+    def run_envelope(
+        self,
+        command: Envelope[Command],
+        *,
+        max_steps: int | None = None,
+    ) -> AsyncIterator[Envelope[Event]]:
+        self.received_max_steps = max_steps
+
+        async def stream() -> AsyncIterator[Envelope[Event]]:
+            yield self._factory.create(
+                WorkProduced(1),
+                origin=command.origin,
+                cause=command,
+            )
+
+        return stream()
+
+
 def make_harness(
     root_handler,
     commit_handler,
@@ -64,6 +89,41 @@ def make_harness(
     command_bus.bind(StartRun, CommandBinding(root_handler))
     command_bus.bind(CommitRunOutcome, CommandBinding(commit_handler))
     return Harness(event_bus, command_bus, DefaultEnvelopeFactory())
+
+
+@pytest.mark.asyncio
+async def test_harness_accepts_structural_run_pump_substitute() -> None:
+    factory = DefaultEnvelopeFactory()
+    scripted_pump: RunPump = ScriptedRunPump(factory)
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
+
+    async def commit_handler(command) -> AsyncIterator[Event]:
+        yield RunCompleted(command.payload.outcome)
+
+    command_bus.bind(CommitRunOutcome, CommandBinding(commit_handler))
+    harness = Harness(
+        InMemoryEventBus(),
+        command_bus,
+        factory,
+        run_pump=scripted_pump,
+    )
+
+    events = [
+        event
+        async for event in harness.run(
+            StartRun(),
+            origin=Origin(component="test"),
+            limits=RunLimits(max_steps=7),
+        )
+    ]
+
+    assert scripted_pump.received_max_steps == 7
+    assert [type(event.payload) for event in events] == [
+        RunStarted,
+        WorkProduced,
+        RunOutcomeReady,
+        RunCompleted,
+    ]
 
 
 @pytest.mark.asyncio

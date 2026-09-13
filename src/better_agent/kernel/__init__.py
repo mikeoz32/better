@@ -18,6 +18,7 @@ from better_agent.kernel.contracts import (
     Message,
     MessageId,
     Origin,
+    RunPump,
     RuntimePort,
 )
 from better_agent.kernel.errors import (
@@ -76,6 +77,7 @@ __all__ = [
     "MessageId",
     "MissingCommandHandlerError",
     "RunFinalizationError",
+    "RunPump",
     "Harness",
     "CancelledOutcome",
     "CommitRunOutcome",

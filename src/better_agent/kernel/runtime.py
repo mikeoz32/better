@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
-from typing import Callable, cast
+from typing import cast
 from uuid import uuid4
 
 from better_agent.kernel.contracts import (
@@ -26,7 +26,9 @@ from better_agent.kernel.errors import (
     DuplicateCommandBindingError,
     MissingCommandHandlerError,
     RuntimeExecutionError,
+    StepBudgetLimitReached,
 )
+from better_agent.kernel.lifecycle import StepBudgetExceeded
 
 
 class DefaultEnvelopeFactory(EnvelopeFactory):
@@ -159,11 +161,11 @@ class RuntimePump:
         command: C,
         *,
         origin: Origin,
-        before_command_start: Callable[[Envelope[Command]], None] | None = None,
+        max_steps: int | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run one command and stream the resulting event envelopes."""
         initial = self._envelope_factory.create(command, origin=origin)
-        stream = self.run_envelope(initial, before_command_start=before_command_start)
+        stream = self.run_envelope(initial, max_steps=max_steps)
         try:
             async for event in stream:
                 yield event
@@ -174,9 +176,11 @@ class RuntimePump:
         self,
         command: Envelope[C],
         *,
-        before_command_start: Callable[[Envelope[Command]], None] | None = None,
+        max_steps: int | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run an already enveloped command with structured task ownership."""
+        if max_steps is not None and max_steps < 1:
+            raise ValueError("max_steps must be positive or None")
         inbox: asyncio.Queue[Envelope[Event]] = asyncio.Queue(maxsize=self._inbox_size)
         control: asyncio.Queue[_ControlMessage] = asyncio.Queue(maxsize=self._inbox_size)
         state_lock = asyncio.Lock()
@@ -184,6 +188,7 @@ class RuntimePump:
         pending_events = 0
         supervisor_done = asyncio.Event()
         supervisor_error: BaseException | None = None
+        steps = 0
 
         async def drain(current: Envelope[Command]) -> None:
             nonlocal pending_events
@@ -218,9 +223,13 @@ class RuntimePump:
             try:
                 async with asyncio.TaskGroup() as tasks:
                     def start(current: Envelope[Command]) -> None:
-                        nonlocal active_tasks
-                        if before_command_start is not None:
-                            before_command_start(current)
+                        nonlocal active_tasks, steps
+                        attempted_step = steps + 1
+                        if max_steps is not None and attempted_step > max_steps:
+                            raise StepBudgetLimitReached(
+                                StepBudgetExceeded(max_steps, attempted_step),
+                            )
+                        steps = attempted_step
                         active_tasks += 1
                         tasks.create_task(drain(current))
 

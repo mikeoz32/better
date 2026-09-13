@@ -1,7 +1,7 @@
 """Public run lifecycle orchestration above the event-command runtime pump."""
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -15,6 +15,7 @@ from better_agent.kernel.contracts import (
     EventBus,
     Message,
     Origin,
+    RunPump,
 )
 from better_agent.kernel.errors import (
     RunFinalizationError,
@@ -48,6 +49,12 @@ class _ActiveRun:
     cancel_requested: asyncio.Event
 
 
+async def _close_stream(stream: object) -> None:
+    closer = getattr(stream, "aclose", None)
+    if closer is not None:
+        await cast(Callable[[], Awaitable[object]], closer)()
+
+
 def _find_error(error: BaseException, error_type: type[BaseException]) -> BaseException | None:
     if isinstance(error, error_type):
         return error
@@ -68,12 +75,12 @@ class Harness:
         command_bus: CommandBus,
         envelope_factory: EnvelopeFactory,
         *,
-        runtime_pump: RuntimePump | None = None,
+        run_pump: RunPump | None = None,
     ) -> None:
         self._event_bus = event_bus
         self._command_bus = command_bus
         self._envelope_factory = envelope_factory
-        self._runtime_pump = runtime_pump or RuntimePump(
+        self._run_pump = run_pump or RuntimePump(
             event_bus,
             command_bus,
             envelope_factory,
@@ -96,11 +103,14 @@ class Harness:
         run = _ActiveRun(RunLifecycle(), asyncio.Event())
         self._active_runs[root.correlation_id] = run
         run.lifecycle.transition(RunState.RUNNING)
-        work_stream: AsyncIterator[Envelope[Event]] = self._runtime_pump.run_envelope(
+        work_stream: AsyncIterator[Envelope[Event]] = self._run_pump.run_envelope(
             root,
-            before_command_start=self._step_counter(limits),
+            max_steps=limits.max_steps,
         )
-        first_event_task = asyncio.create_task(anext(work_stream))
+        async def read_first_event() -> Envelope[Event]:
+            return await anext(work_stream)
+
+        first_event_task = asyncio.create_task(read_first_event())
         last_message: Envelope[Message] = cast(Envelope[Message], root)
 
         try:
@@ -123,13 +133,13 @@ class Harness:
                     yield event
                 outcome = CompletedOutcome()
             except _SemanticCancellation:
-                await work_stream.aclose()
+                await _close_stream(work_stream)
                 outcome = CancelledOutcome(reason="semantic cancellation requested")
             except asyncio.CancelledError:
-                await work_stream.aclose()
+                await _close_stream(work_stream)
                 raise
             except Exception as error:
-                await work_stream.aclose()
+                await _close_stream(work_stream)
                 budget_error = _find_error(error, StepBudgetLimitReached)
                 if budget_error is not None:
                     budget_event = cast(StepBudgetLimitReached, budget_error).event
@@ -184,22 +194,8 @@ class Harness:
         finally:
             first_event_task.cancel()
             await asyncio.gather(first_event_task, return_exceptions=True)
-            await work_stream.aclose()
+            await _close_stream(work_stream)
             self._active_runs.pop(root.correlation_id, None)
-
-    def _step_counter(self, limits: RunLimits):
-        steps = 0
-
-        def before_command_start(_: Envelope[Command]) -> None:
-            nonlocal steps
-            attempted = steps + 1
-            if limits.max_steps is not None and attempted > limits.max_steps:
-                raise StepBudgetLimitReached(
-                    StepBudgetExceeded(limits.max_steps, attempted),
-                )
-            steps = attempted
-
-        return before_command_start
 
     async def _primary_events(
         self,
