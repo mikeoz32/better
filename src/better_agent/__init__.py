@@ -26,6 +26,8 @@ from better_agent.kernel import (
     InMemoryCommandBus,
     InMemoryEventBus,
     KernelError,
+    CapabilityScheduler,
+    InlineExecutionScheduler,
 )
 
 __all__ = [
@@ -54,4 +56,6 @@ __all__ = [
     "InMemoryCommandBus",
     "InMemoryEventBus",
     "KernelError",
+    "CapabilityScheduler",
+    "InlineExecutionScheduler",
 ]

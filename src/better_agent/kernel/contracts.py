@@ -62,7 +62,19 @@ class Envelope[T: Message]:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionClaims:
-    """Opaque scheduler claim contract until the scheduler story defines it."""
+    """Resources and exclusivity claims used by the kernel scheduler.
+
+    ``None`` resources means the planner could not describe the operation,
+    so schedulers must treat the claim conservatively as conflicting with all
+    other work.
+    """
+
+    resources: frozenset[str] | None = None
+    exclusive: bool = True
+
+    def __post_init__(self) -> None:
+        if self.resources is not None and not isinstance(self.resources, frozenset):
+            object.__setattr__(self, "resources", frozenset(self.resources))
 
 
 class EventHandler[E: Event](Protocol):

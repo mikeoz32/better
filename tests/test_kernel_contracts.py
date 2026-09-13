@@ -66,11 +66,23 @@ def test_identity_and_origin_values_are_typed_immutable_values() -> None:
     assert hash(message_id) == hash(MessageId("message-1"))
 
 
-def test_execution_claims_are_opaque_until_scheduler_slice() -> None:
+def test_execution_claims_default_to_conservative_exclusive_unknown() -> None:
     claims = ExecutionClaims()
 
-    assert not hasattr(claims, "exclusive")
-    assert not hasattr(claims, "resources")
+    assert claims.resources is None
+    assert claims.exclusive is True
+
+
+def test_command_binding_keeps_typed_execution_planner() -> None:
+    binding = CommandBinding(
+        handler=handle_prompt,
+        execution=lambda _: ExecutionClaims(resources=frozenset({"model"}), exclusive=False),
+    )
+
+    claims = binding.execution(RunPrompt("inspect"))
+
+    assert claims.resources == frozenset({"model"})
+    assert claims.exclusive is False
 
 
 def test_envelope_keeps_kernel_owned_trace_metadata() -> None:
