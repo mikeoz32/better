@@ -243,18 +243,30 @@ async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishe
 async def test_handler_failure_is_reported_on_next_read_not_at_public_yield() -> None:
     event_bus = InMemoryEventBus()
     command_bus = InMemoryCommandBus(InlineExecutionScheduler())
+    fail_handler = asyncio.Event()
+    failure_observed = asyncio.Event()
 
     async def failing_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
-        yield Started(1)
-        raise ValueError("handler failed")
+        try:
+            yield Started(1)
+            await fail_handler.wait()
+            raise ValueError("handler failed")
+        finally:
+            failure_observed.set()
 
     command_bus.bind(Start, CommandBinding(failing_handler, exclusive_claims))
     pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
     events = pump.run(Start(), origin=Origin(component="test"))
 
     assert (await anext(events)).payload == Started(1)
-    consumer_continued = True
-    assert consumer_continued is True
+    fail_handler.set()
+    consumer_await_completed = False
+    try:
+        await failure_observed.wait()
+        consumer_await_completed = True
+    except asyncio.CancelledError:
+        pytest.fail("handler failure cancelled the consumer between yields")
+    assert consumer_await_completed is True
     with pytest.raises(ExceptionGroup) as error:
         await anext(events)
     assert isinstance(error.value.exceptions[0], ValueError)
