@@ -12,6 +12,7 @@ The first implementation slice establishes:
 - typed message identity and origin values;
 - kernel-owned correlation and causation metadata;
 - event bus, command bus, runtime ingress and scheduler-facing protocols;
+- typed execution claims and a capability-aware scheduler with conservative defaults;
 - deterministic in-memory event/command buses and a non-recursive runtime pump;
 - streamed command events with propagated origin and causation metadata;
 - deterministic recording test doubles;
@@ -37,6 +38,12 @@ uv run ty check
 The import package is `better_agent`; the distribution package is
 `better-agent`; the command-line entry point is `ba`.
 
+Execution claims are derived by each command binding's planner. Set
+`exclusive=False` for operations that can overlap, then describe read and write
+keys with `reads` and `writes`. Same-resource reads may overlap; any write
+conflicts with reads or writes on that key. The default `ExecutionClaims()` is
+unknown and is scheduled conservatively as exclusive.
+
 ## Architecture
 
 The kernel owns lifecycle mechanics, typed event-command dispatch, message
@@ -49,7 +56,7 @@ Runtime composition wires the two public buses and the envelope factory into the
 ```python
 pump = RuntimePump(
     InMemoryEventBus(),
-    InMemoryCommandBus(),
+    InMemoryCommandBus(CapabilityScheduler()),
     DefaultEnvelopeFactory(),
 )
 ```

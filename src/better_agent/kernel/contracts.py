@@ -1,6 +1,7 @@
 """Small, dependency-free contracts shared by the Better Agent kernel."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -62,7 +63,11 @@ class Envelope[T: Message]:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionClaims:
-    """Opaque scheduler claim contract until the scheduler story defines it."""
+    """Resource access claims used to admit a command for execution."""
+
+    reads: frozenset[str] = frozenset()
+    writes: frozenset[str] = frozenset()
+    exclusive: bool = True
 
 
 class EventHandler[E: Event](Protocol):
@@ -88,7 +93,7 @@ class CommandBinding[C: Command]:
     """One command handler paired with its execution-claim planner."""
 
     handler: CommandHandler[C]
-    execution: ExecutionPlanner[C]
+    execution: ExecutionPlanner[C] | None = None
 
 
 class RuntimePort(Protocol):
@@ -129,12 +134,10 @@ class CommandBus(Protocol):
 class ExecutionScheduler(Protocol):
     """Kernel-owned service controlling effectful command admission."""
 
-    async def run[T](
+    def admit(
         self,
         claims: ExecutionClaims,
-        operation: Callable[[], Awaitable[T]],
-        /,
-    ) -> T: ...
+    ) -> AbstractAsyncContextManager[None]: ...
 
 
 class EnvelopeFactory(Protocol):

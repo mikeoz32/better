@@ -1,14 +1,28 @@
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from typing import cast
 
 import pytest
 
-from better_agent import Command, Envelope, Event, MessageId, Origin
-from better_agent.kernel import CommandBinding, CommandBus, EventBus, EventHandler
+from better_agent import Command, Envelope, Event, ExecutionClaims, MessageId, Origin
+from better_agent.kernel import (
+    CommandBinding,
+    CommandBus,
+    EventBus,
+    EventHandler,
+    ExecutionScheduler,
+    InlineExecutionScheduler,
+)
 from better_agent.kernel.errors import DuplicateCommandBindingError, MissingCommandHandlerError
-from better_agent.kernel.runtime import DefaultEnvelopeFactory, InMemoryCommandBus, InMemoryEventBus, RuntimePump
+from better_agent.kernel.runtime import (
+    DefaultEnvelopeFactory,
+    InMemoryCommandBus,
+    InMemoryEventBus,
+    RuntimePump,
+)
+from better_agent.kernel.scheduler import CapabilityScheduler
 from tests.support.kernel import RecordingEnvelopeFactory, exclusive_claims
 
 
@@ -75,6 +89,28 @@ class ScriptedCommandBus(CommandBus):
         return stream()
 
 
+class RecordingScheduler(ExecutionScheduler):
+    def __init__(self) -> None:
+        self.claims: list[ExecutionClaims] = []
+        self.active = 0
+
+    def admit(self, claims: ExecutionClaims) -> AbstractAsyncContextManager[None]:
+        @asynccontextmanager
+        async def admission() -> AsyncIterator[None]:
+            self.claims.append(claims)
+            self.active += 1
+            try:
+                yield
+            finally:
+                self.active -= 1
+
+        return admission()
+
+
+def read_claim(_: Command) -> ExecutionClaims:
+    return ExecutionClaims(reads=frozenset({"session"}), exclusive=False)
+
+
 @pytest.mark.asyncio
 async def test_runtime_pump_uses_event_and_command_bus_protocols() -> None:
     event_bus = ScriptedEventBus({Started: (Continue(2),)})
@@ -126,53 +162,60 @@ async def test_event_bus_allows_events_without_subscribers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_command_bus_derives_claims_once_and_holds_admission_for_stream() -> None:
+    scheduler = RecordingScheduler()
+    bus = InMemoryCommandBus(scheduler)
+    release = asyncio.Event()
+
+    async def streaming_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
+        yield Started(1)
+        await release.wait()
+        yield Continued(2)
+
+    bus.bind(Start, CommandBinding(streaming_handler, read_claim))
+    command = DefaultEnvelopeFactory().create(Start(), origin=Origin(component="test"))
+    events = bus.dispatch(command)
+
+    assert await anext(events) == Started(1)
+    assert scheduler.claims == [read_claim(Start())]
+    assert scheduler.active == 1
+
+    release.set()
+    assert await anext(events) == Continued(2)
+    with pytest.raises(StopAsyncIteration):
+        await anext(events)
+    assert scheduler.active == 0
+
+
+@pytest.mark.asyncio
+async def test_command_bus_uses_conservative_claim_when_planner_is_missing() -> None:
+    scheduler = RecordingScheduler()
+    bus = InMemoryCommandBus(scheduler)
+    bus.bind(Start, CommandBinding(start_handler))
+    command = DefaultEnvelopeFactory().create(Start(), origin=Origin(component="test"))
+
+    assert [event async for event in bus.dispatch(command)] == [Started(0)]
+    assert scheduler.claims == [ExecutionClaims()]
+
+
+@pytest.mark.asyncio
 async def test_command_bus_requires_exactly_one_binding() -> None:
-    bus = InMemoryCommandBus()
+    bus = InMemoryCommandBus(InlineExecutionScheduler())
     binding = CommandBinding(handler=start_handler, execution=exclusive_claims)
     bus.bind(Start, binding)
 
     with pytest.raises(DuplicateCommandBindingError):
         bus.bind(Start, binding)
 
-    command = DefaultEnvelopeFactory().create(
-        Continue(1),
-        origin=Origin(component="test"),
-    )
+    command = DefaultEnvelopeFactory().create(Continue(1), origin=Origin(component="test"))
     with pytest.raises(MissingCommandHandlerError):
         bus.dispatch(command)
 
 
 @pytest.mark.asyncio
-async def test_command_bus_streams_events_before_handler_completion() -> None:
-    bus = InMemoryCommandBus()
-    release = asyncio.Event()
-    finished = False
-
-    async def streaming_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
-        nonlocal finished
-        yield Started(1)
-        await release.wait()
-        finished = True
-        yield Continued(2)
-
-    bus.bind(Start, CommandBinding(streaming_handler, exclusive_claims))
-    command = DefaultEnvelopeFactory().create(Start(), origin=Origin(component="test"))
-    events = bus.dispatch(command)
-
-    first = await anext(events)
-    assert first == Started(1)
-    assert finished is False
-
-    release.set()
-    assert await anext(events) == Continued(2)
-    with pytest.raises(StopAsyncIteration):
-        await anext(events)
-
-
-@pytest.mark.asyncio
 async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishes() -> None:
     event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
     release = asyncio.Event()
     finished = False
 
@@ -188,47 +231,126 @@ async def test_runtime_pump_forwards_first_streamed_event_before_handler_finishe
     events = pump.run(Start(), origin=Origin(component="test"))
 
     try:
-        async with asyncio.timeout(1):
-            first = await anext(events)
+        first = await anext(events)
+        assert first.payload == Started(1)
+        assert finished is False
     finally:
         release.set()
         await events.aclose()
 
-    assert first.payload == Started(1)
-    assert finished is False
-
 
 @pytest.mark.asyncio
-async def test_runtime_pump_applies_backpressure_to_streamed_events() -> None:
+async def test_handler_failure_is_reported_on_next_read_not_at_public_yield() -> None:
     event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
-    pulled = 0
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
+    fail_handler = asyncio.Event()
+    failure_observed = asyncio.Event()
 
-    async def streaming_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
-        nonlocal pulled
-        pulled += 1
-        yield Started(1)
-        pulled += 1
-        yield Continued(2)
+    async def failing_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
+        try:
+            yield Started(1)
+            await fail_handler.wait()
+            raise ValueError("handler failed")
+        finally:
+            failure_observed.set()
 
-    command_bus.bind(Start, CommandBinding(streaming_handler, exclusive_claims))
+    command_bus.bind(Start, CommandBinding(failing_handler, exclusive_claims))
     pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
     events = pump.run(Start(), origin=Origin(component="test"))
 
-    first = await anext(events)
-    assert first.payload == Started(1)
-    assert pulled == 1
-
-    second = await anext(events)
-    assert second.payload == Continued(2)
-    assert pulled == 2
+    assert (await anext(events)).payload == Started(1)
+    fail_handler.set()
+    consumer_await_completed = False
+    try:
+        await failure_observed.wait()
+        consumer_await_completed = True
+    except asyncio.CancelledError:
+        pytest.fail("handler failure cancelled the consumer between yields")
+    assert consumer_await_completed is True
+    with pytest.raises(ExceptionGroup) as error:
+        await anext(events)
+    assert isinstance(error.value.exceptions[0], ValueError)
+    assert str(error.value.exceptions[0]) == "handler failed"
     await events.aclose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_pump_overlaps_compatible_commands_through_real_dispatch_path() -> None:
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus(CapabilityScheduler())
+    started = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    max_active = 0
+
+    async def concurrent_handler(command: Envelope[Continue]) -> AsyncIterator[Event]:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        if active == 2:
+            started.set()
+        try:
+            await release.wait()
+            yield Continued(command.payload.depth)
+        finally:
+            active -= 1
+
+    def start_reaction(_: Envelope[Started]) -> tuple[Command, ...]:
+        return Continue(1), Continue(2)
+
+    event_bus.subscribe(Started, start_reaction)
+    command_bus.bind(Start, CommandBinding(start_handler, read_claim))
+    command_bus.bind(Continue, CommandBinding(concurrent_handler, read_claim))
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    events = pump.run(Start(), origin=Origin(component="test"))
+
+    assert (await anext(events)).payload == Started(0)
+    await wait_for_event(started)
+    assert active == 2
+    release.set()
+    remaining = [event async for event in events]
+
+    assert {event.payload for event in remaining} == {Continued(1), Continued(2)}
+    assert max_active == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_pump_reenters_concurrent_events_in_emission_order() -> None:
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus(CapabilityScheduler())
+    first_release = asyncio.Event()
+    second_release = asyncio.Event()
+    both_started = asyncio.Event()
+    started_count = 0
+
+    async def concurrent_handler(command: Envelope[Continue]) -> AsyncIterator[Event]:
+        nonlocal started_count
+        started_count += 1
+        if started_count == 2:
+            both_started.set()
+        await (first_release if command.payload.depth == 1 else second_release).wait()
+        yield Continued(command.payload.depth)
+
+    event_bus.subscribe(Started, lambda _: (Continue(1), Continue(2)))
+    command_bus.bind(Start, CommandBinding(start_handler, read_claim))
+    command_bus.bind(Continue, CommandBinding(concurrent_handler, read_claim))
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    events = pump.run(Start(), origin=Origin(component="test"))
+
+    assert (await anext(events)).payload == Started(0)
+    await wait_for_event(both_started)
+    second_release.set()
+    assert (await anext(events)).payload == Continued(2)
+    first_release.set()
+    assert (await anext(events)).payload == Continued(1)
+    with pytest.raises(StopAsyncIteration):
+        await anext(events)
 
 
 @pytest.mark.asyncio
 async def test_runtime_waits_for_all_event_reactions_before_running_commands() -> None:
     event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
     factory = RecordingEnvelopeFactory()
     log: list[str] = []
 
@@ -261,9 +383,34 @@ async def test_runtime_waits_for_all_event_reactions_before_running_commands() -
 
 
 @pytest.mark.asyncio
+async def test_runtime_pump_aclose_cancels_owned_command_tasks() -> None:
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus(CapabilityScheduler())
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def cancellable_handler(_: Envelope[Start]) -> AsyncIterator[Event]:
+        try:
+            started.set()
+            yield Started(1)
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    command_bus.bind(Start, CommandBinding(cancellable_handler, read_claim))
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    events = pump.run(Start(), origin=Origin(component="test"))
+
+    assert (await anext(events)).payload == Started(1)
+    await wait_for_event(started)
+    await events.aclose()
+    await wait_for_event(cancelled)
+
+
+@pytest.mark.asyncio
 async def test_runtime_pump_handles_deep_event_command_chains_without_recursion() -> None:
     event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
+    command_bus = InMemoryCommandBus(InlineExecutionScheduler())
     factory = DefaultEnvelopeFactory()
     reaction_depth = 0
     max_reaction_depth = 0
@@ -291,3 +438,8 @@ async def test_runtime_pump_handles_deep_event_command_chains_without_recursion(
 
     assert len(events) == 2_001
     assert max_reaction_depth == 1
+
+
+async def wait_for_event(event: asyncio.Event) -> None:
+    async with asyncio.timeout(1):
+        await event.wait()
