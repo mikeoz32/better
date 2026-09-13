@@ -140,7 +140,19 @@ async def test_unrelated_claim_bypasses_older_blocked_claim() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_claims_block_known_claims_conservatively() -> None:
-    scheduler = CapabilityScheduler()
+    class ObservableScheduler(CapabilityScheduler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.admission_requests = 0
+            self.second_request = asyncio.Event()
+
+        def admit(self, claims: ExecutionClaims):
+            self.admission_requests += 1
+            if self.admission_requests == 2:
+                self.second_request.set()
+            return super().admit(claims)
+
+    scheduler = ObservableScheduler()
     unknown_started = asyncio.Event()
     known_started = asyncio.Event()
     release = asyncio.Event()
@@ -157,6 +169,7 @@ async def test_unknown_claims_block_known_claims_conservatively() -> None:
     )
     await wait_for_started(unknown_started)
     known_task = asyncio.create_task(_run_admitted(scheduler, read("model"), known))
+    await wait_for_started(scheduler.second_request)
     assert not known_started.is_set()
     release.set()
     await asyncio.gather(unknown_task, known_task)
