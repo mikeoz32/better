@@ -38,9 +38,11 @@ uv run ty check
 The import package is `better_agent`; the distribution package is
 `better-agent`; the command-line entry point is `ba`.
 
-Execution claims are derived by each command binding's planner. Use explicit,
-non-exclusive resource claims for work that can overlap; the default
-`ExecutionClaims()` is unknown and is scheduled conservatively as exclusive.
+Execution claims are derived by each command binding's planner. Set
+`exclusive=False` for operations that can overlap, then describe read and write
+keys with `reads` and `writes`. Same-resource reads may overlap; any write
+conflicts with reads or writes on that key. The default `ExecutionClaims()` is
+unknown and is scheduled conservatively as exclusive.
 
 ## Architecture
 
@@ -54,7 +56,7 @@ Runtime composition wires the two public buses and the envelope factory into the
 ```python
 pump = RuntimePump(
     InMemoryEventBus(),
-    InMemoryCommandBus(),
+    InMemoryCommandBus(CapabilityScheduler()),
     DefaultEnvelopeFactory(),
 )
 ```

@@ -69,20 +69,33 @@ def test_identity_and_origin_values_are_typed_immutable_values() -> None:
 def test_execution_claims_default_to_conservative_exclusive_unknown() -> None:
     claims = ExecutionClaims()
 
-    assert claims.resources is None
+    assert claims.reads == frozenset()
+    assert claims.writes == frozenset()
     assert claims.exclusive is True
 
 
 def test_command_binding_keeps_typed_execution_planner() -> None:
     binding = CommandBinding(
         handler=handle_prompt,
-        execution=lambda _: ExecutionClaims(resources=frozenset({"model"}), exclusive=False),
+        execution=lambda _: ExecutionClaims(
+            reads=frozenset({"model"}),
+            exclusive=False,
+        ),
     )
 
-    claims = binding.execution(RunPrompt("inspect"))
+    planner = binding.execution
+    assert planner is not None
+    claims = planner(RunPrompt("inspect"))
 
-    assert claims.resources == frozenset({"model"})
+    assert claims.reads == frozenset({"model"})
+    assert claims.writes == frozenset()
     assert claims.exclusive is False
+
+
+def test_command_binding_planner_is_optional() -> None:
+    binding = CommandBinding(handler=handle_prompt)
+
+    assert binding.execution is None
 
 
 def test_envelope_keeps_kernel_owned_trace_metadata() -> None:
@@ -138,7 +151,9 @@ async def test_recording_kernel_doubles_capture_contract_interactions() -> None:
     message_id = await runtime_port.submit(RunPrompt("submitted"))
 
     assert event_bus.published == [event]
-    assert isinstance(command_bus.bindings[RunPrompt].execution(RunPrompt("run")), ExecutionClaims)
+    planner = command_bus.bindings[RunPrompt].execution
+    assert planner is not None
+    assert isinstance(planner(RunPrompt("run")), ExecutionClaims)
     assert command_bus.dispatched == [command]
     assert runtime_port.submitted == [RunPrompt("submitted")]
     assert message_id == MessageId("submitted-1")

@@ -1,6 +1,6 @@
 """Concrete event-command runtime primitives."""
 
-from collections import deque
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from typing import cast
@@ -16,6 +16,8 @@ from better_agent.kernel.contracts import (
     Event,
     EventBus,
     EventHandler,
+    ExecutionClaims,
+    ExecutionScheduler,
     Message,
     MessageId,
     Origin,
@@ -77,9 +79,10 @@ class InMemoryEventBus(EventBus):
 
 
 class InMemoryCommandBus(CommandBus):
-    """Resolve one command binding and expose its handler stream lazily."""
+    """Resolve bindings and hold scheduler admission across each handler stream."""
 
-    def __init__(self) -> None:
+    def __init__(self, scheduler: ExecutionScheduler) -> None:
+        self._scheduler = scheduler
         self._bindings: dict[type[Command], CommandBinding[Command]] = {}
 
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C]) -> None:
@@ -94,33 +97,40 @@ class InMemoryCommandBus(CommandBus):
         command: Envelope[C],
         /,
     ) -> AsyncIterator[Event]:
-        """Return the selected handler's stream without buffering it."""
+        """Return a lazy stream with one admission covering its full lifetime."""
         command_type = type(command.payload)
         binding = self._bindings.get(command_type)
         if binding is None:
             raise MissingCommandHandlerError(
                 f"no command handler is bound for {command_type.__name__}",
             )
+        claims = binding.execution(command.payload) if binding.execution else ExecutionClaims()
 
         async def stream() -> AsyncIterator[Event]:
-            async for event in binding.handler(cast(Envelope[Command], command)):
-                yield event
+            async with self._scheduler.admit(claims):
+                async for event in binding.handler(cast(Envelope[Command], command)):
+                    yield event
 
         return stream()
 
 
 class RuntimePump:
-    """Process event reactions and command streams serially with backpressure."""
+    """Own concurrent command drains and serialize event reactions."""
 
     def __init__(
         self,
         event_bus: EventBus,
         command_bus: CommandBus,
         envelope_factory: EnvelopeFactory,
+        *,
+        inbox_size: int = 64,
     ) -> None:
+        if inbox_size < 1:
+            raise ValueError("inbox_size must be positive")
         self._event_bus = event_bus
         self._command_bus = command_bus
         self._envelope_factory = envelope_factory
+        self._inbox_size = inbox_size
 
     async def run[C: Command](
         self,
@@ -130,30 +140,69 @@ class RuntimePump:
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run one command and stream the resulting event envelopes."""
         initial = self._envelope_factory.create(command, origin=origin)
-        async for event in self.run_envelope(initial):
-            yield event
+        stream = self.run_envelope(initial)
+        try:
+            async for event in stream:
+                yield event
+        finally:
+            await stream.aclose()
 
     async def run_envelope[C: Command](
         self,
         command: Envelope[C],
     ) -> AsyncGenerator[Envelope[Event], None]:
-        """Run an already enveloped command without recursive dispatch."""
-        pending: deque[Envelope[Command]] = deque([cast(Envelope[Command], command)])
-        while pending:
-            current = pending.popleft()
-            async for produced_event in self._command_bus.dispatch(current):
-                event = self._envelope_factory.create(
-                    produced_event,
-                    origin=current.origin,
-                    cause=current,
-                )
+        """Run an already enveloped command with structured task ownership."""
+        inbox: asyncio.Queue[Envelope[Event]] = asyncio.Queue(maxsize=self._inbox_size)
+        state_changed = asyncio.Condition()
+        active_tasks = 0
+
+        async def drain(current: Envelope[Command]) -> None:
+            nonlocal active_tasks
+            try:
+                async for produced_event in self._command_bus.dispatch(current):
+                    event = self._envelope_factory.create(
+                        produced_event,
+                        origin=current.origin,
+                        cause=current,
+                    )
+                    await inbox.put(event)
+                    async with state_changed:
+                        state_changed.notify_all()
+            finally:
+                async with state_changed:
+                    active_tasks -= 1
+                    state_changed.notify_all()
+
+        async with asyncio.TaskGroup() as tasks:
+            owned_tasks: set[asyncio.Task[None]] = set()
+
+            def start(current: Envelope[Command]) -> None:
+                nonlocal active_tasks
+                active_tasks += 1
+                task = tasks.create_task(drain(current))
+                owned_tasks.add(task)
+                task.add_done_callback(owned_tasks.discard)
+
+            start(cast(Envelope[Command], command))
+            while True:
+                async with state_changed:
+                    while inbox.empty() and active_tasks:
+                        await state_changed.wait()
+                    if inbox.empty():
+                        break
+                    event = inbox.get_nowait()
+
                 produced_commands = await self._event_bus.publish(event)
                 for produced_command in produced_commands:
-                    pending.append(
-                        self._envelope_factory.create(
-                            produced_command,
-                            origin=event.origin,
-                            cause=event,
-                        ),
+                    child = self._envelope_factory.create(
+                        produced_command,
+                        origin=event.origin,
+                        cause=event,
                     )
-                yield event
+                    start(child)
+                try:
+                    yield event
+                except GeneratorExit:
+                    for task in owned_tasks:
+                        task.cancel()
+                    return

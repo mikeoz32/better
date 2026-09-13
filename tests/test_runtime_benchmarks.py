@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from better_agent import Command, Event, Envelope, ExecutionClaims, Origin
-from better_agent.kernel import CommandBinding
+from better_agent.kernel import CapabilityScheduler, CommandBinding
 from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
     InMemoryCommandBus,
@@ -32,7 +32,7 @@ def exclusive_claims(_: Command) -> ExecutionClaims:
 
 def test_runtime_pump_dispatch_benchmark(benchmark) -> None:
     event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
+    command_bus = InMemoryCommandBus(CapabilityScheduler())
 
     def subscriber(_: Envelope[BenchmarkEvent]) -> tuple[Command, ...]:
         return ()

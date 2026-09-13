@@ -1,6 +1,7 @@
 """Small, dependency-free contracts shared by the Better Agent kernel."""
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -62,19 +63,11 @@ class Envelope[T: Message]:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionClaims:
-    """Resources and exclusivity claims used by the kernel scheduler.
+    """Resource access claims used to admit a command for execution."""
 
-    ``None`` resources means the planner could not describe the operation,
-    so schedulers must treat the claim conservatively as conflicting with all
-    other work.
-    """
-
-    resources: frozenset[str] | None = None
+    reads: frozenset[str] = frozenset()
+    writes: frozenset[str] = frozenset()
     exclusive: bool = True
-
-    def __post_init__(self) -> None:
-        if self.resources is not None and not isinstance(self.resources, frozenset):
-            object.__setattr__(self, "resources", frozenset(self.resources))
 
 
 class EventHandler[E: Event](Protocol):
@@ -100,7 +93,7 @@ class CommandBinding[C: Command]:
     """One command handler paired with its execution-claim planner."""
 
     handler: CommandHandler[C]
-    execution: ExecutionPlanner[C]
+    execution: ExecutionPlanner[C] | None = None
 
 
 class RuntimePort(Protocol):
@@ -141,12 +134,10 @@ class CommandBus(Protocol):
 class ExecutionScheduler(Protocol):
     """Kernel-owned service controlling effectful command admission."""
 
-    async def run[T](
+    def admit(
         self,
         claims: ExecutionClaims,
-        operation: Callable[[], Awaitable[T]],
-        /,
-    ) -> T: ...
+    ) -> AbstractAsyncContextManager[None]: ...
 
 
 class EnvelopeFactory(Protocol):

@@ -7,17 +7,25 @@ from better_agent import ExecutionClaims, InlineExecutionScheduler
 from better_agent.kernel.scheduler import CapabilityScheduler
 
 
+def read(resource: str) -> ExecutionClaims:
+    return ExecutionClaims(reads=frozenset({resource}), exclusive=False)
+
+
+def write(resource: str) -> ExecutionClaims:
+    return ExecutionClaims(writes=frozenset({resource}), exclusive=False)
+
+
 async def wait_for_started(started: asyncio.Event) -> None:
     async with asyncio.timeout(1):
         await started.wait()
 
 
-def claim(resource: str) -> ExecutionClaims:
-    return ExecutionClaims(resources=frozenset({resource}), exclusive=False)
+async def noop() -> None:
+    return None
 
 
 @pytest.mark.asyncio
-async def test_compatible_claims_run_concurrently() -> None:
+async def test_same_resource_reads_run_concurrently() -> None:
     scheduler = CapabilityScheduler()
     started = [asyncio.Event(), asyncio.Event()]
     release = asyncio.Event()
@@ -29,8 +37,9 @@ async def test_compatible_claims_run_concurrently() -> None:
 
     tasks = [
         asyncio.create_task(
-            scheduler.run(
-                claim(f"model-{index}"),
+            _run_admitted(
+                scheduler,
+                read("session"),
                 lambda index=index: operation(index),
             ),
         )
@@ -44,11 +53,12 @@ async def test_compatible_claims_run_concurrently() -> None:
 
 
 @pytest.mark.asyncio
-async def test_conflicting_claims_preserve_fifo_order() -> None:
+async def test_read_write_conflict_preserves_fifo_order() -> None:
     scheduler = CapabilityScheduler()
     first_started = asyncio.Event()
     second_started = asyncio.Event()
     third_started = asyncio.Event()
+    unrelated_started = asyncio.Event()
     first_release = asyncio.Event()
     second_release = asyncio.Event()
     order: list[str] = []
@@ -67,19 +77,29 @@ async def test_conflicting_claims_preserve_fifo_order() -> None:
         order.append("third")
         third_started.set()
 
-    first_task = asyncio.create_task(scheduler.run(claim("db"), first))
-    await wait_for_started(first_started)
-    second_task = asyncio.create_task(scheduler.run(claim("db"), second))
-    third_task = asyncio.create_task(scheduler.run(claim("db"), third))
+    async def unrelated() -> None:
+        order.append("unrelated")
+        unrelated_started.set()
 
+    first_task = asyncio.create_task(_run_admitted(scheduler, write("db"), first))
+    await wait_for_started(first_started)
+    second_task = asyncio.create_task(_run_admitted(scheduler, read("db"), second))
+    third_task = asyncio.create_task(_run_admitted(scheduler, write("db"), third))
+    unrelated_task = asyncio.create_task(
+        _run_admitted(scheduler, read("network"), unrelated),
+    )
+
+    await wait_for_started(unrelated_started)
+    assert not second_started.is_set()
+    assert not third_started.is_set()
     first_release.set()
     await wait_for_started(second_started)
     assert not third_started.is_set()
     second_release.set()
 
-    await asyncio.gather(first_task, second_task, third_task)
+    await asyncio.gather(first_task, second_task, third_task, unrelated_task)
 
-    assert order == ["first", "second", "third"]
+    assert order == ["first", "unrelated", "second", "third"]
 
 
 @pytest.mark.asyncio
@@ -102,10 +122,12 @@ async def test_unrelated_claim_bypasses_older_blocked_claim() -> None:
     async def unrelated() -> None:
         unrelated_started.set()
 
-    active_task = asyncio.create_task(scheduler.run(claim("db"), active))
+    active_task = asyncio.create_task(_run_admitted(scheduler, write("db"), active))
     await wait_for_started(active_started)
-    blocked_task = asyncio.create_task(scheduler.run(claim("db"), blocked))
-    unrelated_task = asyncio.create_task(scheduler.run(claim("network"), unrelated))
+    blocked_task = asyncio.create_task(_run_admitted(scheduler, write("db"), blocked))
+    unrelated_task = asyncio.create_task(
+        _run_admitted(scheduler, read("network"), unrelated),
+    )
 
     await wait_for_started(unrelated_started)
     assert not blocked_started.is_set()
@@ -130,33 +152,76 @@ async def test_unknown_claims_block_known_claims_conservatively() -> None:
     async def known() -> None:
         known_started.set()
 
-    unknown_task = asyncio.create_task(scheduler.run(ExecutionClaims(), unknown))
+    unknown_task = asyncio.create_task(
+        _run_admitted(scheduler, ExecutionClaims(), unknown),
+    )
     await wait_for_started(unknown_started)
-    known_task = asyncio.create_task(scheduler.run(claim("model"), known))
-    await asyncio.sleep(0)
+    known_task = asyncio.create_task(_run_admitted(scheduler, read("model"), known))
     assert not known_started.is_set()
-
     release.set()
     await asyncio.gather(unknown_task, known_task)
     assert known_started.is_set()
 
 
 @pytest.mark.asyncio
-async def test_scheduler_releases_claims_after_failure() -> None:
+async def test_waiting_cancellation_removes_request() -> None:
     scheduler = CapabilityScheduler()
-    second_started = asyncio.Event()
+    active_started = asyncio.Event()
+    unrelated_started = asyncio.Event()
+    active_release = asyncio.Event()
+    blocked_started = False
 
-    async def fail() -> None:
-        raise ValueError("boom")
+    async def active() -> None:
+        active_started.set()
+        await active_release.wait()
 
-    async def second() -> None:
-        second_started.set()
+    async def blocked() -> None:
+        nonlocal blocked_started
+        blocked_started = True
 
-    with pytest.raises(ValueError, match="boom"):
-        await scheduler.run(claim("db"), fail)
+    async def unrelated() -> None:
+        unrelated_started.set()
 
-    await scheduler.run(claim("db"), second)
-    assert second_started.is_set()
+    active_task = asyncio.create_task(_run_admitted(scheduler, write("db"), active))
+    await wait_for_started(active_started)
+    blocked_task = asyncio.create_task(_run_admitted(scheduler, write("db"), blocked))
+    unrelated_task = asyncio.create_task(
+        _run_admitted(scheduler, read("network"), unrelated),
+    )
+    await wait_for_started(unrelated_started)
+
+    blocked_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await blocked_task
+    active_release.set()
+    await active_task
+    await unrelated_task
+
+    await _run_admitted(scheduler, write("db"), noop)
+    assert blocked_started is False
+
+
+@pytest.mark.asyncio
+async def test_active_cancellation_releases_claims() -> None:
+    scheduler = CapabilityScheduler()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def active() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    task = asyncio.create_task(_run_admitted(scheduler, write("db"), active))
+    await wait_for_started(started)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await wait_for_started(cancelled)
+
+    await _run_admitted(scheduler, write("db"), noop)
 
 
 @pytest.mark.asyncio
@@ -165,19 +230,23 @@ async def test_scheduler_can_be_replaced_by_a_deterministic_double() -> None:
         def __init__(self) -> None:
             self.claims: list[ExecutionClaims] = []
 
-        async def run[T](
-            self,
-            claims: ExecutionClaims,
-            operation: Callable[[], Awaitable[T]],
-            /,
-        ) -> T:
+        def admit(self, claims: ExecutionClaims):
             self.claims.append(claims)
-            return await operation()
+
+            class Admission:
+                async def __aenter__(self):
+                    return None
+
+                async def __aexit__(self, exc_type, exc, traceback):
+                    return False
+
+            return Admission()
 
     scheduler = RecordingScheduler()
-    claims = claim("model")
+    claims = read("model")
 
-    result = await scheduler.run(claims, lambda: asyncio.sleep(0, result="ok"))
+    async with scheduler.admit(claims):
+        result = "ok"
 
     assert result == "ok"
     assert scheduler.claims == [claims]
@@ -187,6 +256,16 @@ async def test_scheduler_can_be_replaced_by_a_deterministic_double() -> None:
 async def test_inline_scheduler_is_a_deterministic_replacement() -> None:
     scheduler = InlineExecutionScheduler()
 
-    result = await scheduler.run(ExecutionClaims(), lambda: asyncio.sleep(0, result="ok"))
+    async with scheduler.admit(ExecutionClaims()):
+        result = "ok"
 
     assert result == "ok"
+
+
+async def _run_admitted[T](
+    scheduler: CapabilityScheduler,
+    claims: ExecutionClaims,
+    operation: Callable[[], Awaitable[T]],
+) -> T:
+    async with scheduler.admit(claims):
+        return await operation()
