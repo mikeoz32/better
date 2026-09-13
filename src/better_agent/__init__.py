@@ -90,6 +90,7 @@ from better_agent.kernel import (
     ModelUsageUpdated,
     ModelUserMessage,
 )
+from better_agent.pydantic_ai_adapter import PydanticAIRuntime
 
 __all__ = [
     "Command",
@@ -170,6 +171,7 @@ __all__ = [
     "ModelResponseCompleted",
     "ModelResponseFailed",
     "ModelRuntime",
+    "PydanticAIRuntime",
     "ModelSystemMessage",
     "ModelTextDelta",
     "ModelThinkingDelta",

@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "A small event-command coding-agent microkernel."
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "pydantic-ai>=1.0,<2.0",
+]
 
 [project.scripts]
 ba = "better_agent.cli:main"
