@@ -15,6 +15,8 @@ The first implementation slice establishes:
 - typed execution claims and a capability-aware scheduler with conservative defaults;
 - deterministic in-memory event/command buses and a non-recursive runtime pump;
 - streamed command events with propagated origin and causation metadata;
+- explicit run lifecycle, semantic cancellation and step-budget enforcement;
+- typed runtime faults and gated terminal outcome finalization through `Harness`;
 - deterministic recording test doubles;
 - offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
@@ -60,6 +62,22 @@ pump = RuntimePump(
     DefaultEnvelopeFactory(),
 )
 ```
+
+The public run boundary is an async event stream. `RunStarted` is emitted first;
+work then runs through the same injected buses, and terminal events are withheld
+until `CommitRunOutcome` completes successfully:
+
+```python
+harness = Harness(event_bus, command_bus, DefaultEnvelopeFactory())
+events = harness.run(command, origin=Origin(component="cli"))
+async for envelope in events:
+    handle(envelope)
+```
+
+`Harness.cancel(correlation_id)` is semantic run cancellation. Cancelling the
+consumer task is transport abandonment and only guarantees cleanup of owned
+work. `RunLimits(max_steps=...)` bounds primary work commands; finalization is
+always separate from that budget.
 
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product

@@ -11,3 +11,29 @@ class DuplicateCommandBindingError(KernelError):
 
 class MissingCommandHandlerError(KernelError):
     """Raised when a command has no active binding."""
+
+
+class InvalidRunTransitionError(KernelError):
+    """Raised when a run lifecycle transition is not legal."""
+
+
+class RuntimeExecutionError(KernelError):
+    """Internal error carrying the phase and message that failed at runtime."""
+
+    def __init__(self, phase: str, cause: object, error: BaseException) -> None:
+        self.phase = phase
+        self.cause = cause
+        self.error = error
+        super().__init__(f"runtime {phase} execution failed: {error}")
+
+
+class StepBudgetLimitReached(KernelError):
+    """Internal signal raised before a command would exceed the work budget."""
+
+    def __init__(self, event: object) -> None:
+        self.event = event
+        super().__init__(str(event))
+
+
+class RunFinalizationError(KernelError):
+    """Raised when outcome commit violates the terminal-event contract."""

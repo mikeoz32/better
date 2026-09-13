@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
-from typing import cast
+from typing import Callable, cast
 from uuid import uuid4
 
 from better_agent.kernel.contracts import (
@@ -22,7 +22,11 @@ from better_agent.kernel.contracts import (
     MessageId,
     Origin,
 )
-from better_agent.kernel.errors import DuplicateCommandBindingError, MissingCommandHandlerError
+from better_agent.kernel.errors import (
+    DuplicateCommandBindingError,
+    MissingCommandHandlerError,
+    RuntimeExecutionError,
+)
 
 
 class DefaultEnvelopeFactory(EnvelopeFactory):
@@ -155,10 +159,11 @@ class RuntimePump:
         command: C,
         *,
         origin: Origin,
+        before_command_start: Callable[[Envelope[Command]], None] | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run one command and stream the resulting event envelopes."""
         initial = self._envelope_factory.create(command, origin=origin)
-        stream = self.run_envelope(initial)
+        stream = self.run_envelope(initial, before_command_start=before_command_start)
         try:
             async for event in stream:
                 yield event
@@ -168,6 +173,8 @@ class RuntimePump:
     async def run_envelope[C: Command](
         self,
         command: Envelope[C],
+        *,
+        before_command_start: Callable[[Envelope[Command]], None] | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run an already enveloped command with structured task ownership."""
         inbox: asyncio.Queue[Envelope[Event]] = asyncio.Queue(maxsize=self._inbox_size)
@@ -181,20 +188,26 @@ class RuntimePump:
         async def drain(current: Envelope[Command]) -> None:
             nonlocal pending_events
             try:
-                async for produced_event in self._command_bus.dispatch(current):
-                    event = self._envelope_factory.create(
-                        produced_event,
-                        origin=current.origin,
-                        cause=current,
-                    )
-                    async with state_lock:
-                        pending_events += 1
-                    try:
-                        await inbox.put(event)
-                    except BaseException:
+                try:
+                    async for produced_event in self._command_bus.dispatch(current):
+                        event = self._envelope_factory.create(
+                            produced_event,
+                            origin=current.origin,
+                            cause=current,
+                        )
                         async with state_lock:
-                            pending_events -= 1
-                        raise
+                            pending_events += 1
+                        try:
+                            await inbox.put(event)
+                        except BaseException:
+                            async with state_lock:
+                                pending_events -= 1
+                            raise
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as error:
+                    _mark_runtime_error(error, phase="command_handler", cause=current)
+                    raise
             finally:
                 current_task = asyncio.current_task()
                 if current_task is None or not current_task.cancelling():
@@ -207,6 +220,8 @@ class RuntimePump:
                 async with asyncio.TaskGroup() as tasks:
                     def start(current: Envelope[Command]) -> None:
                         nonlocal active_tasks
+                        if before_command_start is not None:
+                            before_command_start(current)
                         active_tasks += 1
                         tasks.create_task(drain(current))
 
@@ -284,7 +299,13 @@ class RuntimePump:
 
         try:
             while (event := await next_event()) is not None:
-                produced_commands = await self._event_bus.publish(event)
+                try:
+                    produced_commands = await self._event_bus.publish(event)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException as error:
+                    _mark_runtime_error(error, phase="event_handler", cause=event)
+                    raise
                 for produced_command in produced_commands:
                     child = self._envelope_factory.create(
                         produced_command,
@@ -298,3 +319,10 @@ class RuntimePump:
             if not supervisor.done():
                 supervisor.cancel()
             await asyncio.gather(supervisor, return_exceptions=True)
+
+
+def _mark_runtime_error(error: BaseException, *, phase: str, cause: object) -> None:
+    """Keep diagnostic context on the original error until Harness normalizes it."""
+    boundary = RuntimeExecutionError(phase, cause, error)
+    setattr(error, "_better_agent_runtime_error", boundary)
+    setattr(error, "_better_agent_runtime_phase", phase)
