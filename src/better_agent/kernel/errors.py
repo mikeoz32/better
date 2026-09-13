@@ -1,5 +1,7 @@
 """Runtime errors raised by the kernel dispatch boundaries."""
 
+from better_agent.kernel.contracts import ExtensionId
+
 
 class KernelError(RuntimeError):
     """Base class for expected kernel configuration and dispatch failures."""
@@ -41,3 +43,28 @@ class StepBudgetLimitReached(KernelError):
 
 class RunFinalizationError(KernelError):
     """Raised when outcome commit violates the terminal-event contract."""
+
+
+class DuplicateExtensionIdError(KernelError):
+    """Raised when multiple extensions declare the same identity."""
+
+    def __init__(self, extension_id: ExtensionId) -> None:
+        self.extension_id = extension_id
+        super().__init__(f"extension id {extension_id} is declared more than once")
+
+
+class MissingExtensionDependencyError(KernelError):
+    """Raised when an extension requires an unavailable extension."""
+
+    def __init__(self, extension_id: ExtensionId, required_id: ExtensionId) -> None:
+        self.extension_id = extension_id
+        self.required_id = required_id
+        super().__init__(f"extension {extension_id} requires missing extension {required_id}")
+
+
+class ExtensionDependencyCycleError(KernelError):
+    """Raised when extension requirements contain a dependency cycle."""
+
+    def __init__(self, cycle: tuple[ExtensionId, ...]) -> None:
+        self.cycle = cycle
+        super().__init__("extension dependency cycle: " + " -> ".join(map(str, cycle)))

@@ -17,6 +17,7 @@ The first implementation slice establishes:
 - streamed command events with propagated origin and causation metadata;
 - explicit run lifecycle, semantic cancellation and step-budget enforcement;
 - typed runtime faults and gated terminal outcome finalization through `Harness`;
+- structural extension contracts with deterministic dependency resolution;
 - deterministic recording test doubles;
 - offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
@@ -78,6 +79,13 @@ async for envelope in events:
 consumer task is transport abandonment and only guarantees cleanup of owned
 work. `RunLimits(max_steps=...)` bounds primary work commands; finalization is
 always separate from that budget.
+
+Extensions declare an immutable `ExtensionSpec` and synchronously contribute
+typed subscriptions and command bindings through `ExtensionRegistrar`. The
+`TopologicalExtensionResolver` validates duplicate IDs, missing requirements
+and cycles, then returns dependencies before dependents with lexical ordering
+for otherwise independent extensions. Discovery and host lifecycle belong to
+BA-12, not this contract layer.
 
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product

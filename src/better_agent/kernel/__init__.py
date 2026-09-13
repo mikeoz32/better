@@ -21,11 +21,21 @@ from better_agent.kernel.contracts import (
     RunPump,
     RuntimePort,
 )
+from better_agent.kernel.extensions import (
+    Extension,
+    ExtensionRegistrar,
+    ExtensionResolver,
+    ExtensionSpec,
+    TopologicalExtensionResolver,
+)
 from better_agent.kernel.errors import (
     DuplicateCommandBindingError,
+    DuplicateExtensionIdError,
+    ExtensionDependencyCycleError,
     InvalidRunTransitionError,
     KernelError,
     MissingCommandHandlerError,
+    MissingExtensionDependencyError,
     RunFinalizationError,
 )
 from better_agent.kernel.harness import Harness
@@ -73,11 +83,19 @@ __all__ = [
     "ExecutionPlanner",
     "ExecutionScheduler",
     "ExtensionId",
+    "Extension",
+    "ExtensionRegistrar",
+    "ExtensionResolver",
+    "ExtensionSpec",
     "Message",
     "MessageId",
     "MissingCommandHandlerError",
+    "DuplicateExtensionIdError",
+    "ExtensionDependencyCycleError",
+    "MissingExtensionDependencyError",
     "RunFinalizationError",
     "RunPump",
+    "TopologicalExtensionResolver",
     "Harness",
     "CancelledOutcome",
     "CommitRunOutcome",
