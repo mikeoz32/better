@@ -20,12 +20,14 @@ The first implementation slice establishes:
 - structural extension contracts with deterministic dependency resolution;
 - static and Python entry-point extension discovery with typed load diagnostics;
 - staged extension host startup with explicit failure and lifecycle semantics;
+- Better-owned model request/response contracts with deterministic scripted runtime tests;
 - deterministic recording test doubles;
 - offline event-dispatch regression benchmark;
 - the `better-agent` distribution and `ba` CLI entry point.
 
 The agent loop, Pydantic AI adapter, bundled tools, sessions and TUI are
-implemented in subsequent backlog slices.
+implemented in subsequent backlog slices. The model boundary is deliberately
+provider-neutral; Pydantic AI integration belongs to BA-14.
 
 ## Development
 
@@ -91,6 +93,11 @@ and test composition, while `EntryPointExtensionSource` discovers the fixed
 `better_agent.extensions` group. `DefaultExtensionHost` resolves, stages and
 replays extension registrations before marking the host started; optional load
 failures are reported and required failures abort startup.
+
+The model boundary uses replayable `ModelRequest` history and Better-owned
+stream events. A `ModelRuntime` emits text/thinking deltas, complete tool calls,
+usage updates and exactly one terminal response event. `ScriptedModelRuntime`
+is test-only and does not import Pydantic AI or retain hidden continuation state.
 
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product
