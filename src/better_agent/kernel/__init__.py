@@ -19,20 +19,16 @@ from better_agent.kernel.contracts import (
     MessageId,
     Origin,
     RuntimePort,
-    RuntimeChannel,
-    RuntimeSink,
 )
 from better_agent.kernel.errors import (
     DuplicateCommandBindingError,
     KernelError,
     MissingCommandHandlerError,
-    RuntimeDispatchContextError,
 )
 from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
     InMemoryCommandBus,
     InMemoryEventBus,
-    RendezvousChannel,
     RuntimePump,
 )
 
@@ -56,14 +52,10 @@ __all__ = [
     "Message",
     "MessageId",
     "MissingCommandHandlerError",
-    "RuntimeDispatchContextError",
     "Origin",
     "RuntimePort",
-    "RuntimeChannel",
-    "RuntimeSink",
     "RuntimePump",
     "InMemoryCommandBus",
     "InMemoryEventBus",
-    "RendezvousChannel",
     "KernelError",
 ]

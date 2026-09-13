@@ -1,6 +1,6 @@
 import asyncio
-from dataclasses import dataclass
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from better_agent import Command, Event, Envelope, ExecutionClaims, Origin
 from better_agent.kernel import CommandBinding
@@ -8,7 +8,6 @@ from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
     InMemoryCommandBus,
     InMemoryEventBus,
-    RendezvousChannel,
     RuntimePump,
 )
 
@@ -32,9 +31,8 @@ def exclusive_claims(_: Command) -> ExecutionClaims:
 
 
 def test_runtime_pump_dispatch_benchmark(benchmark) -> None:
-    channel = RendezvousChannel()
-    event_bus = InMemoryEventBus(channel)
-    command_bus = InMemoryCommandBus(channel)
+    event_bus = InMemoryEventBus()
+    command_bus = InMemoryCommandBus()
 
     def subscriber(_: Envelope[BenchmarkEvent]) -> tuple[Command, ...]:
         return ()
@@ -45,7 +43,7 @@ def test_runtime_pump_dispatch_benchmark(benchmark) -> None:
         BenchmarkCommand,
         CommandBinding(command_handler, exclusive_claims),
     )
-    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory(), channel)
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
 
     loop = asyncio.new_event_loop()
     try:

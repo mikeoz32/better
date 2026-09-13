@@ -11,7 +11,3 @@ class DuplicateCommandBindingError(KernelError):
 
 class MissingCommandHandlerError(KernelError):
     """Raised when a command has no active binding."""
-
-
-class RuntimeDispatchContextError(KernelError):
-    """Raised when a bus is dispatched outside an active runtime pump."""

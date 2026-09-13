@@ -111,7 +111,7 @@ class EventBus(Protocol):
         self,
         event: Envelope[E],
         /,
-    ) -> None: ...
+    ) -> tuple[Command, ...]: ...
 
 
 class CommandBus(Protocol):
@@ -119,35 +119,11 @@ class CommandBus(Protocol):
 
     def bind[C: Command](self, command_type: type[C], binding: CommandBinding[C], /) -> None: ...
 
-    async def dispatch[C: Command](
+    def dispatch[C: Command](
         self,
         command: Envelope[C],
         /,
-    ) -> None: ...
-
-
-class RuntimeSink(Protocol):
-    """Explicit message output channel used by bus implementations during a run."""
-
-    def emit_command(self, command: Command, *, origin: Origin) -> None: ...
-
-    async def emit_event(self, event: Event, *, origin: Origin) -> None: ...
-
-
-class RuntimeChannel(RuntimeSink, Protocol):
-    """Runtime-owned rendezvous channel shared by the pump and its buses."""
-
-    def begin(self) -> None: ...
-
-    async def receive_event(self) -> tuple[Event, Origin] | None: ...
-
-    def acknowledge_event(self) -> None: ...
-
-    def finish(self) -> None: ...
-
-    def take_commands(self) -> tuple[tuple[Command, Origin], ...]: ...
-
-    def close(self) -> None: ...
+    ) -> AsyncIterator[Event]: ...
 
 
 class ExecutionScheduler(Protocol):
