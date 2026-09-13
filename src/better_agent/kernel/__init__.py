@@ -28,15 +28,17 @@ from better_agent.kernel.extensions import (
     ExtensionSpec,
     TopologicalExtensionResolver,
 )
+from better_agent.kernel.extension_contracts import (
+    ExtensionLoadFailure,
+    ExtensionLoadFailureKind,
+    ExtensionLoadResult,
+    ExtensionRequirement,
+)
 from better_agent.kernel.extension_host import (
     DefaultExtensionHost,
     EntryPointExtensionSource,
     ExtensionHost,
     ExtensionHostReport,
-    ExtensionLoadFailure,
-    ExtensionLoadFailureKind,
-    ExtensionLoadResult,
-    ExtensionRequirement,
     ExtensionSource,
     StaticExtensionSource,
 )

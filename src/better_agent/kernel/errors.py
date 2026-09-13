@@ -1,13 +1,7 @@
 """Runtime errors raised by the kernel dispatch boundaries."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 from better_agent.kernel.contracts import ExtensionId
-
-if TYPE_CHECKING:
-    from better_agent.kernel.extension_host import ExtensionLoadFailure
+from better_agent.kernel.extension_contracts import ExtensionLoadFailure
 
 
 class KernelError(RuntimeError):
