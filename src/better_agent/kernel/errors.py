@@ -30,9 +30,13 @@ class RuntimeExecutionError(KernelError):
 class StepBudgetLimitReached(KernelError):
     """Internal signal raised before a command would exceed the work budget."""
 
-    def __init__(self, event: object) -> None:
-        self.event = event
-        super().__init__(str(event))
+    def __init__(self, limit: int, attempted_step: int, cause: object) -> None:
+        self.limit = limit
+        self.attempted_step = attempted_step
+        self.cause = cause
+        super().__init__(
+            f"step budget {limit} exceeded at attempted step {attempted_step}",
+        )
 
 
 class RunFinalizationError(KernelError):

@@ -28,7 +28,6 @@ from better_agent.kernel.errors import (
     RuntimeExecutionError,
     StepBudgetLimitReached,
 )
-from better_agent.kernel.lifecycle import StepBudgetExceeded
 
 
 class DefaultEnvelopeFactory(EnvelopeFactory):
@@ -227,7 +226,9 @@ class RuntimePump:
                         attempted_step = steps + 1
                         if max_steps is not None and attempted_step > max_steps:
                             raise StepBudgetLimitReached(
-                                StepBudgetExceeded(max_steps, attempted_step),
+                                max_steps,
+                                attempted_step,
+                                current,
                             )
                         steps = attempted_step
                         active_tasks += 1

@@ -29,6 +29,7 @@ from better_agent import (
     StepBudgetExceeded,
 )
 from better_agent.kernel.runtime import InMemoryCommandBus, InMemoryEventBus
+from tests.support.kernel import RecordingEnvelopeFactory
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,7 +285,8 @@ async def test_step_budget_counts_root_and_spawned_commands() -> None:
     command_bus.bind(StartRun, CommandBinding(root_handler))
     command_bus.bind(SpawnChild, CommandBinding(child_handler))
     command_bus.bind(CommitRunOutcome, CommandBinding(commit_handler))
-    harness = Harness(event_bus, command_bus, DefaultEnvelopeFactory())
+    factory = RecordingEnvelopeFactory()
+    harness = Harness(event_bus, command_bus, factory)
 
     events = [
         event
@@ -304,6 +306,17 @@ async def test_step_budget_counts_root_and_spawned_commands() -> None:
     assert len(budget_events) == 1
     assert budget_events[0].limit == 1
     assert budget_events[0].attempted_step == 2
+    attempted_child = next(
+        envelope
+        for envelope in factory.created
+        if isinstance(envelope.payload, SpawnChild)
+    )
+    budget_envelope = next(
+        event
+        for event in events
+        if isinstance(event.payload, StepBudgetExceeded)
+    )
+    assert budget_envelope.causation_id == attempted_child.id
     assert isinstance(events[-1].payload, RunFailed)
 
 

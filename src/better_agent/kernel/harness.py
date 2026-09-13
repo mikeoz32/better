@@ -142,15 +142,19 @@ class Harness:
                 await _close_stream(work_stream)
                 budget_error = _find_error(error, StepBudgetLimitReached)
                 if budget_error is not None:
-                    budget_event = cast(StepBudgetLimitReached, budget_error).event
+                    budget_error = cast(StepBudgetLimitReached, budget_error)
+                    budget_event = StepBudgetExceeded(
+                        budget_error.limit,
+                        budget_error.attempted_step,
+                    )
                     budget_envelope = self._envelope_factory.create(
-                        cast(StepBudgetExceeded, budget_event),
+                        budget_event,
                         origin=origin,
-                        cause=last_message,
+                        cause=cast(Envelope[Message], budget_error.cause),
                     )
                     last_message = cast(Envelope[Message], budget_envelope)
                     yield cast(Envelope[Event], budget_envelope)
-                    outcome = FailedOutcome(cast(StepBudgetExceeded, budget_event))
+                    outcome = FailedOutcome(budget_event)
                 else:
                     runtime_error = _find_error(error, RuntimeExecutionError)
                     if runtime_error is not None:
