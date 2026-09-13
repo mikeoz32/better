@@ -13,6 +13,7 @@ from better_agent.kernel import (
     EventHandler,
     ExecutionClaims,
     MessageId,
+    Message,
     Origin,
     RuntimePort,
 )
@@ -21,6 +22,7 @@ from better_agent.kernel import (
 class RecordingEnvelopeFactory(EnvelopeFactory):
     def __init__(self) -> None:
         self._next_id = 0
+        self.created: list[Envelope[Message]] = []
 
     def create[T: Event | Command, C: Event | Command](
         self,
@@ -33,13 +35,15 @@ class RecordingEnvelopeFactory(EnvelopeFactory):
         message_id = MessageId(f"message-{self._next_id}")
         correlation_id = cause.correlation_id if cause else CorrelationId("correlation-1")
         causation_id = cause.id if cause else None
-        return Envelope(
+        envelope = Envelope(
             id=message_id,
             payload=payload,
             correlation_id=correlation_id,
             causation_id=causation_id,
             origin=origin,
         )
+        self.created.append(cast(Envelope[Message], envelope))
+        return envelope
 
 
 class RecordingEventBus(EventBus):

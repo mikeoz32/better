@@ -131,6 +131,17 @@ class CommandBus(Protocol):
     ) -> AsyncIterator[Event]: ...
 
 
+class RunPump(Protocol):
+    """Primary work-graph stream used by a Harness run."""
+
+    def run_envelope[C: Command](
+        self,
+        command: Envelope[C],
+        *,
+        max_steps: int | None = None,
+    ) -> AsyncIterator[Envelope[Event]]: ...
+
+
 class ExecutionScheduler(Protocol):
     """Kernel-owned service controlling effectful command admission."""
 

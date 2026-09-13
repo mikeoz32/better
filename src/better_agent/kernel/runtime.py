@@ -22,7 +22,12 @@ from better_agent.kernel.contracts import (
     MessageId,
     Origin,
 )
-from better_agent.kernel.errors import DuplicateCommandBindingError, MissingCommandHandlerError
+from better_agent.kernel.errors import (
+    DuplicateCommandBindingError,
+    MissingCommandHandlerError,
+    RuntimeExecutionError,
+    StepBudgetLimitReached,
+)
 
 
 class DefaultEnvelopeFactory(EnvelopeFactory):
@@ -155,10 +160,11 @@ class RuntimePump:
         command: C,
         *,
         origin: Origin,
+        max_steps: int | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run one command and stream the resulting event envelopes."""
         initial = self._envelope_factory.create(command, origin=origin)
-        stream = self.run_envelope(initial)
+        stream = self.run_envelope(initial, max_steps=max_steps)
         try:
             async for event in stream:
                 yield event
@@ -168,8 +174,12 @@ class RuntimePump:
     async def run_envelope[C: Command](
         self,
         command: Envelope[C],
+        *,
+        max_steps: int | None = None,
     ) -> AsyncGenerator[Envelope[Event], None]:
         """Run an already enveloped command with structured task ownership."""
+        if max_steps is not None and max_steps < 1:
+            raise ValueError("max_steps must be positive or None")
         inbox: asyncio.Queue[Envelope[Event]] = asyncio.Queue(maxsize=self._inbox_size)
         control: asyncio.Queue[_ControlMessage] = asyncio.Queue(maxsize=self._inbox_size)
         state_lock = asyncio.Lock()
@@ -177,24 +187,30 @@ class RuntimePump:
         pending_events = 0
         supervisor_done = asyncio.Event()
         supervisor_error: BaseException | None = None
+        steps = 0
 
         async def drain(current: Envelope[Command]) -> None:
             nonlocal pending_events
             try:
-                async for produced_event in self._command_bus.dispatch(current):
-                    event = self._envelope_factory.create(
-                        produced_event,
-                        origin=current.origin,
-                        cause=current,
-                    )
-                    async with state_lock:
-                        pending_events += 1
-                    try:
-                        await inbox.put(event)
-                    except BaseException:
+                try:
+                    async for produced_event in self._command_bus.dispatch(current):
+                        event = self._envelope_factory.create(
+                            produced_event,
+                            origin=current.origin,
+                            cause=current,
+                        )
                         async with state_lock:
-                            pending_events -= 1
-                        raise
+                            pending_events += 1
+                        try:
+                            await inbox.put(event)
+                        except BaseException:
+                            async with state_lock:
+                                pending_events -= 1
+                            raise
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    raise RuntimeExecutionError("command_handler", current, error) from error
             finally:
                 current_task = asyncio.current_task()
                 if current_task is None or not current_task.cancelling():
@@ -206,7 +222,15 @@ class RuntimePump:
             try:
                 async with asyncio.TaskGroup() as tasks:
                     def start(current: Envelope[Command]) -> None:
-                        nonlocal active_tasks
+                        nonlocal active_tasks, steps
+                        attempted_step = steps + 1
+                        if max_steps is not None and attempted_step > max_steps:
+                            raise StepBudgetLimitReached(
+                                max_steps,
+                                attempted_step,
+                                current,
+                            )
+                        steps = attempted_step
                         active_tasks += 1
                         tasks.create_task(drain(current))
 
@@ -284,7 +308,12 @@ class RuntimePump:
 
         try:
             while (event := await next_event()) is not None:
-                produced_commands = await self._event_bus.publish(event)
+                try:
+                    produced_commands = await self._event_bus.publish(event)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    raise RuntimeExecutionError("event_handler", event, error) from error
                 for produced_command in produced_commands:
                     child = self._envelope_factory.create(
                         produced_command,
