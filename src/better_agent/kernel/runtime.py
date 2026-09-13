@@ -205,9 +205,8 @@ class RuntimePump:
                             raise
                 except asyncio.CancelledError:
                     raise
-                except BaseException as error:
-                    _mark_runtime_error(error, phase="command_handler", cause=current)
-                    raise
+                except Exception as error:
+                    raise RuntimeExecutionError("command_handler", current, error) from error
             finally:
                 current_task = asyncio.current_task()
                 if current_task is None or not current_task.cancelling():
@@ -303,9 +302,8 @@ class RuntimePump:
                     produced_commands = await self._event_bus.publish(event)
                 except asyncio.CancelledError:
                     raise
-                except BaseException as error:
-                    _mark_runtime_error(error, phase="event_handler", cause=event)
-                    raise
+                except Exception as error:
+                    raise RuntimeExecutionError("event_handler", event, error) from error
                 for produced_command in produced_commands:
                     child = self._envelope_factory.create(
                         produced_command,
@@ -319,10 +317,3 @@ class RuntimePump:
             if not supervisor.done():
                 supervisor.cancel()
             await asyncio.gather(supervisor, return_exceptions=True)
-
-
-def _mark_runtime_error(error: BaseException, *, phase: str, cause: object) -> None:
-    """Keep diagnostic context on the original error until Harness normalizes it."""
-    boundary = RuntimeExecutionError(phase, cause, error)
-    setattr(error, "_better_agent_runtime_error", boundary)
-    setattr(error, "_better_agent_runtime_phase", phase)

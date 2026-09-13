@@ -102,7 +102,11 @@ async def test_harness_streams_run_started_and_committed_completion() -> None:
 
 @pytest.mark.asyncio
 async def test_unexpected_handler_error_becomes_runtime_fault_and_failed_outcome() -> None:
-    async def failing_handler(_: object) -> AsyncIterator[Event]:
+    faulting_command_id = None
+
+    async def failing_handler(command) -> AsyncIterator[Event]:
+        nonlocal faulting_command_id
+        faulting_command_id = command.id
         raise ValueError("model exploded")
         yield WorkProduced(0)
 
@@ -133,7 +137,8 @@ async def test_unexpected_handler_error_becomes_runtime_fault_and_failed_outcome
     assert isinstance(ready_event.payload.outcome, FailedOutcome)
     assert isinstance(ready_event.payload.outcome.reason, RuntimeFault)
     assert ready_event.payload.outcome.reason.exception_type == "ValueError"
-    assert fault_event.causation_id == events[0].id
+    assert faulting_command_id is not None
+    assert fault_event.causation_id == faulting_command_id
 
 
 @pytest.mark.asyncio
@@ -189,10 +194,14 @@ async def test_consumer_cancellation_propagates_after_owned_work_cleanup() -> No
     await asyncio.wait_for(started.wait(), timeout=1)
 
     next_event = asyncio.create_task(anext(stream))
+    await asyncio.sleep(0)
+    assert not next_event.done()
     next_event.cancel()
     with pytest.raises(asyncio.CancelledError):
         await next_event
     await asyncio.wait_for(cancelled.wait(), timeout=1)
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
 
 
 @pytest.mark.asyncio
@@ -288,7 +297,11 @@ async def test_step_budget_cancels_already_started_concurrent_work() -> None:
 
 @pytest.mark.asyncio
 async def test_event_handler_error_becomes_runtime_fault_without_exception_group_leak() -> None:
-    def failing_reaction(_: object) -> tuple[Command, ...]:
+    faulting_event_id = None
+
+    def failing_reaction(event) -> tuple[Command, ...]:
+        nonlocal faulting_event_id
+        faulting_event_id = event.id
         raise LookupError("reaction failed")
 
     async def root_handler(_: object) -> AsyncIterator[Event]:
@@ -318,6 +331,8 @@ async def test_event_handler_error_becomes_runtime_fault_without_exception_group
     fault = events[1].payload
     assert isinstance(fault, RuntimeFaulted)
     assert fault.fault.phase == "event_handler"
+    assert faulting_event_id is not None
+    assert events[1].causation_id == faulting_event_id
 
 
 @pytest.mark.asyncio
@@ -381,17 +396,22 @@ async def test_typed_domain_failure_event_is_not_normalized_to_runtime_fault() -
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["missing", "mismatch", "multiple", "failure"])
+@pytest.mark.parametrize("mode", ["missing", "mismatch", "multiple", "extra", "failure"])
 async def test_invalid_commit_stream_exposes_no_terminal(mode: str) -> None:
     async def root_handler(_: object) -> AsyncIterator[Event]:
         yield WorkProduced(1)
 
     async def commit_handler(command) -> AsyncIterator[Event]:
+        if mode == "missing":
+            return
         if mode == "mismatch":
             yield RunCancelled(command.payload.outcome)
         elif mode == "multiple":
             yield RunCompleted(command.payload.outcome)
             yield RunCompleted(command.payload.outcome)
+        elif mode == "extra":
+            yield RunCompleted(command.payload.outcome)
+            yield WorkProduced(2)
         else:
             raise RuntimeError("commit failed")
 

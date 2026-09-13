@@ -15,7 +15,11 @@ from better_agent.kernel import (
     ExecutionScheduler,
     InlineExecutionScheduler,
 )
-from better_agent.kernel.errors import DuplicateCommandBindingError, MissingCommandHandlerError
+from better_agent.kernel.errors import (
+    DuplicateCommandBindingError,
+    MissingCommandHandlerError,
+    RuntimeExecutionError,
+)
 from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
     InMemoryCommandBus,
@@ -269,8 +273,10 @@ async def test_handler_failure_is_reported_on_next_read_not_at_public_yield() ->
     assert consumer_await_completed is True
     with pytest.raises(ExceptionGroup) as error:
         await anext(events)
-    assert isinstance(error.value.exceptions[0], ValueError)
-    assert str(error.value.exceptions[0]) == "handler failed"
+    boundary = error.value.exceptions[0]
+    assert isinstance(boundary, RuntimeExecutionError)
+    assert isinstance(boundary.__cause__, ValueError)
+    assert str(boundary.__cause__) == "handler failed"
     await events.aclose()
 
 

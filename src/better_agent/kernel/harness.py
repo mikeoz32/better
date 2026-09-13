@@ -59,17 +59,6 @@ def _find_error(error: BaseException, error_type: type[BaseException]) -> BaseEx
     return None
 
 
-def _find_runtime_annotation(error: BaseException) -> BaseException | None:
-    if hasattr(error, "_better_agent_runtime_phase"):
-        return error
-    if isinstance(error, BaseExceptionGroup):
-        for nested in error.exceptions:
-            found = _find_runtime_annotation(nested)
-            if found is not None:
-                return found
-    return None
-
-
 class Harness:
     """Own run lifecycle, semantic cancellation and outcome finalization."""
 
@@ -136,7 +125,10 @@ class Harness:
             except _SemanticCancellation:
                 await work_stream.aclose()
                 outcome = CancelledOutcome(reason="semantic cancellation requested")
-            except BaseException as error:
+            except asyncio.CancelledError:
+                await work_stream.aclose()
+                raise
+            except Exception as error:
                 await work_stream.aclose()
                 budget_error = _find_error(error, StepBudgetLimitReached)
                 if budget_error is not None:
@@ -154,27 +146,12 @@ class Harness:
                     if runtime_error is not None:
                         runtime_error = cast(RuntimeExecutionError, runtime_error)
                         phase = runtime_error.phase
-                        original = runtime_error.error
+                        original = runtime_error.__cause__ or runtime_error.error
+                        cause = cast(Envelope[Message], runtime_error.cause)
                     else:
-                        runtime_annotation = _find_runtime_annotation(error)
-                        if runtime_annotation is not None:
-                            boundary = getattr(
-                                runtime_annotation,
-                                "_better_agent_runtime_error",
-                                None,
-                            )
-                            if isinstance(boundary, RuntimeExecutionError):
-                                phase = boundary.phase
-                                original = boundary.error
-                            else:
-                                phase = cast(
-                                    str,
-                                    getattr(runtime_annotation, "_better_agent_runtime_phase"),
-                                )
-                                original = runtime_annotation
-                        else:
-                            phase = "runtime"
-                            original = error
+                        phase = "runtime"
+                        original = error
+                        cause = last_message
                     fault = RuntimeFault(
                         phase=phase,
                         exception_type=type(original).__name__,
@@ -183,7 +160,7 @@ class Harness:
                     fault_envelope = self._envelope_factory.create(
                         RuntimeFaulted(fault),
                         origin=origin,
-                        cause=last_message,
+                        cause=cause,
                     )
                     last_message = cast(Envelope[Message], fault_envelope)
                     yield cast(Envelope[Event], fault_envelope)
