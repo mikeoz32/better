@@ -23,9 +23,12 @@ from better_agent.kernel import (
     Origin,
     RuntimeDispatchContextError,
     RuntimePort,
+    RuntimeChannel,
+    RuntimeSink,
     RuntimePump,
     InMemoryCommandBus,
     InMemoryEventBus,
+    RendezvousChannel,
     KernelError,
 )
 
@@ -52,8 +55,11 @@ __all__ = [
     "Origin",
     "RuntimeDispatchContextError",
     "RuntimePort",
+    "RuntimeChannel",
+    "RuntimeSink",
     "RuntimePump",
     "InMemoryCommandBus",
     "InMemoryEventBus",
+    "RendezvousChannel",
     "KernelError",
 ]

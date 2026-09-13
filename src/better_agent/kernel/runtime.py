@@ -4,9 +4,8 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator
 from contextlib import suppress
-from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import cast
 from uuid import uuid4
 
 from better_agent.kernel.contracts import (
@@ -20,6 +19,8 @@ from better_agent.kernel.contracts import (
     Message,
     MessageId,
     Origin,
+    RuntimeChannel,
+    RuntimeSink,
 )
 from better_agent.kernel.contracts import CommandBus, EventBus
 from better_agent.kernel.errors import (
@@ -55,92 +56,73 @@ class _Subscription:
     origin: Origin
 
 
-@dataclass(frozen=True, slots=True)
-class _Produced[T: Message]:
-    """Internal payload/provenance pair used only while pumping messages."""
-
-    payload: T
-    origin: Origin
-
-
-class _RuntimeEmitter(Protocol):
-    def emit_command(self, produced: _Produced[Command], /) -> None: ...
-
-    async def emit_event(self, produced: _Produced[Event], /) -> None: ...
-
-
-_active_emitter: ContextVar[_RuntimeEmitter | None] = ContextVar(
-    "better_agent_active_runtime_emitter",
-    default=None,
-)
-
-
-def _require_emitter() -> _RuntimeEmitter:
-    emitter = _active_emitter.get()
-    if emitter is None:
-        raise RuntimeDispatchContextError("bus operation requires an active RuntimePump")
-    return emitter
-
-
-def emit_command(command: Command, *, origin: Origin) -> None:
-    """Emit a command from a custom EventBus implementation in the active pump."""
-    _require_emitter().emit_command(_Produced(command, origin))
-
-
-async def emit_event(event: Event, *, origin: Origin) -> None:
-    """Emit an event from a custom CommandBus implementation in the active pump."""
-    await _require_emitter().emit_event(_Produced(event, origin))
-
-
 @dataclass(slots=True)
 class _EventDelivery:
-    produced: _Produced[Event]
+    event: Event
+    origin: Origin
     acknowledged: asyncio.Future[None]
 
 
-class _RendezvousEmitter:
+class RendezvousChannel(RuntimeChannel):
     """One-slot event delivery that blocks producers until the consumer resumes."""
 
     def __init__(self) -> None:
         self._event: _EventDelivery | None = None
+        self._in_flight: _EventDelivery | None = None
         self._available = asyncio.Event()
         self._closed = False
-        self._commands: list[_Produced[Command]] = []
+        self._commands: list[tuple[Command, Origin]] = []
 
-    def emit_command(self, produced: _Produced[Command], /) -> None:
+    def begin(self) -> None:
+        if self._event is not None or self._in_flight is not None:
+            raise RuntimeDispatchContextError("runtime channel has an outstanding event")
+        self._available.clear()
+        self._commands.clear()
+        self._closed = False
+
+    def emit_command(self, command: Command, *, origin: Origin) -> None:
         if self._closed:
             raise RuntimeDispatchContextError("runtime emitter is closed")
-        self._commands.append(produced)
+        self._commands.append((command, origin))
 
-    async def emit_event(self, produced: _Produced[Event], /) -> None:
+    async def emit_event(self, event: Event, *, origin: Origin) -> None:
         if self._closed:
             raise RuntimeDispatchContextError("runtime emitter is closed")
         if self._event is not None:
             raise RuntimeDispatchContextError("runtime emitter already has an unconsumed event")
-        delivery = _EventDelivery(produced, asyncio.get_running_loop().create_future())
+        delivery = _EventDelivery(
+            event,
+            origin,
+            asyncio.get_running_loop().create_future(),
+        )
         self._event = delivery
         self._available.set()
         await delivery.acknowledged
 
-    async def receive(self) -> _EventDelivery | None:
+    async def receive_event(self) -> tuple[Event, Origin] | None:
         while self._event is None and not self._closed:
             await self._available.wait()
         if self._event is None:
             return None
         delivery = self._event
         self._event = None
+        self._in_flight = delivery
         self._available.clear()
-        return delivery
+        return delivery.event, delivery.origin
 
     def finish(self) -> None:
         self._closed = True
         self._available.set()
 
-    def acknowledge(self, delivery: _EventDelivery) -> None:
+    def acknowledge_event(self) -> None:
+        delivery = self._in_flight
+        if delivery is None:
+            raise RuntimeDispatchContextError("runtime channel has no event to acknowledge")
+        self._in_flight = None
         if not delivery.acknowledged.done():
             delivery.acknowledged.set_result(None)
 
-    def take_commands(self) -> tuple[_Produced[Command], ...]:
+    def take_commands(self) -> tuple[tuple[Command, Origin], ...]:
         commands = tuple(self._commands)
         self._commands.clear()
         return commands
@@ -150,6 +132,10 @@ class _RendezvousEmitter:
         self._available.set()
         if self._event is not None and not self._event.acknowledged.done():
             self._event.acknowledged.cancel()
+        if self._in_flight is not None and not self._in_flight.acknowledged.done():
+            self._in_flight.acknowledged.cancel()
+        self._event = None
+        self._in_flight = None
 
 
 def _producer_origin(producer: object) -> Origin:
@@ -163,7 +149,8 @@ def _producer_origin(producer: object) -> Origin:
 class InMemoryEventBus(EventBus):
     """Fan out events to matching handlers in registration order."""
 
-    def __init__(self) -> None:
+    def __init__(self, sink: RuntimeSink) -> None:
+        self._sink = sink
         self._subscriptions: list[_Subscription] = []
 
     def subscribe[E: Event](
@@ -184,19 +171,20 @@ class InMemoryEventBus(EventBus):
         event: Envelope[E],
         /,
     ) -> None:
-        emitter = _require_emitter()
         for subscription in self._subscriptions:
             if isinstance(event.payload, subscription.event_type):
                 for command in subscription.handler(cast(Envelope[Event], event)):
-                    emitter.emit_command(
-                        _Produced(command, subscription.origin)
+                    self._sink.emit_command(
+                        command,
+                        origin=subscription.origin,
                     )
 
 
 class InMemoryCommandBus(CommandBus):
     """Resolve one command binding and expose its stream to the serial pump."""
 
-    def __init__(self) -> None:
+    def __init__(self, sink: RuntimeSink) -> None:
+        self._sink = sink
         self._bindings: dict[type[Command], CommandBinding[Command]] = {}
         self._origins: dict[type[Command], Origin] = {}
 
@@ -210,7 +198,6 @@ class InMemoryCommandBus(CommandBus):
 
     async def dispatch[C: Command](self, command: Envelope[C], /) -> None:
         """Execute a command and deliver each handler event to the active pump."""
-        emitter = _require_emitter()
         command_type = type(command.payload)
         binding = self._bindings.get(command_type)
         if binding is None:
@@ -219,7 +206,7 @@ class InMemoryCommandBus(CommandBus):
             )
 
         async for event in binding.handler(cast(Envelope[Command], command)):
-            await emitter.emit_event(_Produced(event, self._origins[command_type]))
+            await self._sink.emit_event(event, origin=self._origins[command_type])
 
 
 class RuntimePump:
@@ -230,10 +217,12 @@ class RuntimePump:
         event_bus: EventBus,
         command_bus: CommandBus,
         envelope_factory: EnvelopeFactory,
+        channel: RuntimeChannel,
     ) -> None:
         self._event_bus = event_bus
         self._command_bus = command_bus
         self._envelope_factory = envelope_factory
+        self._channel = channel
 
     async def run[C: Command](
         self,
@@ -254,48 +243,50 @@ class RuntimePump:
         pending: deque[Envelope[Command]] = deque([cast(Envelope[Command], command)])
         while pending:
             current = pending.popleft()
-            emitter = _RendezvousEmitter()
-            token = _active_emitter.set(emitter)
-            queued_commands: list[tuple[_Produced[Command], Envelope[Event]]] = []
+            self._channel.begin()
+            queued_commands: list[tuple[Command, Origin, Envelope[Event]]] = []
 
             async def dispatch() -> None:
                 try:
                     await self._command_bus.dispatch(current)
                 finally:
-                    emitter.finish()
+                    self._channel.finish()
 
             dispatch_task = asyncio.create_task(dispatch())
+            completed = False
             try:
                 while True:
-                    delivery = await emitter.receive()
+                    delivery = await self._channel.receive_event()
                     if delivery is None:
                         break
+                    payload, origin = delivery
                     event = self._envelope_factory.create(
-                        delivery.produced.payload,
-                        origin=delivery.produced.origin,
+                        payload,
+                        origin=origin,
                         cause=current,
                     )
                     await self._event_bus.publish(event)
                     queued_commands.extend(
-                        (produced_command, event)
-                        for produced_command in emitter.take_commands()
+                        (command, origin, event)
+                        for command, origin in self._channel.take_commands()
                     )
                     yield event
-                    emitter.acknowledge(delivery)
+                    self._channel.acknowledge_event()
 
                 await dispatch_task
-                for produced_command, cause in queued_commands:
+                for produced_command, origin, cause in queued_commands:
                     pending.append(
                         self._envelope_factory.create(
-                            produced_command.payload,
-                            origin=produced_command.origin,
+                            produced_command,
+                            origin=origin,
                             cause=cause,
                         )
                     )
+                completed = True
             finally:
                 if not dispatch_task.done():
                     dispatch_task.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await dispatch_task
-                emitter.close()
-                _active_emitter.reset(token)
+                if not completed:
+                    self._channel.close()

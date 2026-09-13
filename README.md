@@ -44,6 +44,19 @@ envelopes, scheduling boundaries, extension resolution and cancellation. Core
 capabilities such as tools, sessions, context, compaction, policy and TUI are
 bundled extensions using the same public extension model as external packages.
 
+Runtime composition wires one explicit channel into both buses and the pump:
+
+```python
+channel = RendezvousChannel()
+event_bus = InMemoryEventBus(channel)
+command_bus = InMemoryCommandBus(channel)
+pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory(), channel)
+```
+
+The channel is a bounded rendezvous for streamed events. Custom bus
+implementations receive the `RuntimeSink` dependency explicitly and can be
+substituted in runtime tests without depending on an in-memory bus.
+
 The default verification suite is deterministic and offline. No FastAPI server,
 database, Redis service or Docker Compose stack is part of the current product
 surface.

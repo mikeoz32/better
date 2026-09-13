@@ -8,6 +8,7 @@ from better_agent.kernel.runtime import (
     DefaultEnvelopeFactory,
     InMemoryCommandBus,
     InMemoryEventBus,
+    RendezvousChannel,
     RuntimePump,
 )
 
@@ -31,8 +32,9 @@ def exclusive_claims(_: Command) -> ExecutionClaims:
 
 
 def test_runtime_pump_dispatch_benchmark(benchmark) -> None:
-    event_bus = InMemoryEventBus()
-    command_bus = InMemoryCommandBus()
+    channel = RendezvousChannel()
+    event_bus = InMemoryEventBus(channel)
+    command_bus = InMemoryCommandBus(channel)
 
     def subscriber(_: Envelope[BenchmarkEvent]) -> tuple[Command, ...]:
         return ()
@@ -43,7 +45,7 @@ def test_runtime_pump_dispatch_benchmark(benchmark) -> None:
         BenchmarkCommand,
         CommandBinding(command_handler, exclusive_claims),
     )
-    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory())
+    pump = RuntimePump(event_bus, command_bus, DefaultEnvelopeFactory(), channel)
 
     loop = asyncio.new_event_loop()
     try:
