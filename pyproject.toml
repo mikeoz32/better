@@ -9,7 +9,7 @@ description = "A small event-command coding-agent microkernel."
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "pydantic-ai>=1.0,<2.0",
+    "pydantic-ai==1.107.5",
 ]
 
 [project.scripts]
