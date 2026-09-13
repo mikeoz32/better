@@ -78,6 +78,12 @@ from better_agent.kernel.errors import (
     RunFinalizationError,
 )
 from better_agent.kernel.harness import Harness
+from better_agent.kernel.model_loop import (
+    ModelEventObserved,
+    ModelLoopPump,
+    ModelToolCallCommand,
+    ModelToolResult,
+)
 from better_agent.kernel.lifecycle import (
     CancelledOutcome,
     CommitRunOutcome,
@@ -169,6 +175,10 @@ __all__ = [
     "ModelUsageUpdated",
     "ModelUserMessage",
     "Harness",
+    "ModelEventObserved",
+    "ModelLoopPump",
+    "ModelToolCallCommand",
+    "ModelToolResult",
     "CancelledOutcome",
     "CommitRunOutcome",
     "CompletedOutcome",

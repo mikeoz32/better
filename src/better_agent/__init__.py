@@ -89,6 +89,10 @@ from better_agent.kernel import (
     ModelUsage,
     ModelUsageUpdated,
     ModelUserMessage,
+    ModelEventObserved,
+    ModelLoopPump,
+    ModelToolCallCommand,
+    ModelToolResult,
 )
 
 __all__ = [
@@ -180,4 +184,8 @@ __all__ = [
     "ModelUsage",
     "ModelUsageUpdated",
     "ModelUserMessage",
+    "ModelEventObserved",
+    "ModelLoopPump",
+    "ModelToolCallCommand",
+    "ModelToolResult",
 ]
